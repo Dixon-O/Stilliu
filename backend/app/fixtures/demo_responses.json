@@ -1,0 +1,35 @@
+{
+  "health": {
+    "status": "ok",
+    "demo_mode": true
+  },
+  "analyze": {
+    "scores": {
+      "generic_distance": 71.0,
+      "voice_distance": 38.5,
+      "generic_raw": 0.18,
+      "voice_raw": 0.23
+    },
+    "directions": [
+      {
+        "persona": "Sparse Minimalist",
+        "persona_description": "Short sentences. Nothing decorative. Meaning carried by what is left out.",
+        "text": "AI erases voices. Not through malice — through averaging. Every writer who leans on it drifts toward the mean. The work gets cleaner. Blander. Safer. That's the cost nobody mentions.",
+        "generic_distance": 28.0
+      },
+      {
+        "persona": "The Arguer",
+        "persona_description": "Leads with a bold claim. Builds a case. Anticipates pushback and answers it.",
+        "text": "AI homogenisation is the most underreported threat to writing culture right now. Yes, individual quality improves — Doshi and Hauser proved it. But read a hundred AI-assisted essays and you'll find the same cadence, the same hedges, the same arc. The counterargument is that good ideas transcend style. That's wrong. Style is how an idea becomes yours.",
+        "generic_distance": 22.5
+      },
+      {
+        "persona": "Sensory-Led",
+        "persona_description": "Grounds ideas in physical sensation, texture, and concrete scene.",
+        "text": "Paste your draft into any AI assistant. Watch it come back smoother, rounder, emptier — like river stones that lost their edges in the current. That's what homogenisation feels like from the inside: not loss, but a quiet erasure of the grain.",
+        "generic_distance": 19.0
+      }
+    ],
+    "demo_mode": true
+  }
+}
