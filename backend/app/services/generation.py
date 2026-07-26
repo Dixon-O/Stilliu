@@ -53,34 +53,34 @@ PERSONAS = [
         "name": "Sparse Minimalist",
         "description": "Short sentences. Nothing decorative. Meaning carried by what is left out.",
         "instruction": (
-            "Rewrite the following draft as a Sparse Minimalist. "
-            "Use short, declarative sentences. Strip every adjective that does not change meaning. "
-            "Remove all filler phrases ('in order to', 'the fact that', 'it is important'). "
-            "Do NOT use long flowing sentences, metaphors, or rhetorical questions. "
-            "The power comes from compression and silence."
+            "Rewrite the text below. Style: Sparse Minimalist. "
+            "Rules: short declarative sentences only, no adjectives unless they change meaning, "
+            "no filler phrases, no metaphors, no rhetorical questions. "
+            "Write the rewritten text immediately. Do not add notes, commentary, explanations, "
+            "or parenthetical remarks of any kind. Stop after the rewrite."
         ),
     },
     {
         "name": "The Arguer",
         "description": "Leads with a bold claim. Builds a case. Anticipates pushback and answers it.",
         "instruction": (
-            "Rewrite the following draft as The Arguer. "
-            "Open with a direct, controversial, or counterintuitive claim. "
-            "Build your case step by step, anticipating the strongest objection, then answering it. "
-            "Do NOT use hedging language ('perhaps', 'might', 'some people think'). "
-            "Do NOT start with a question. Every sentence should advance the argument."
+            "Rewrite the text below. Style: The Arguer. "
+            "Rules: open with a bold, direct claim; build the argument step by step; "
+            "address the strongest objection and refute it; no hedging words "
+            "('perhaps', 'might', 'some people think'); do not start with a question. "
+            "Write the rewritten text immediately. Do not add notes or commentary. Stop after the rewrite."
         ),
     },
     {
         "name": "Sensory-Led",
         "description": "Grounds ideas in physical sensation, texture, and concrete scene.",
         "instruction": (
-            "Rewrite the following draft as Sensory-Led. "
-            "Open with a concrete sensory detail — something seen, heard, felt, or smelled. "
-            "Ground every abstract idea in a physical object, texture, or moment. "
-            "Do NOT begin with an abstract claim or a statistic. "
-            "Do NOT use the words 'important', 'significant', or 'interesting'. "
-            "Make the reader feel present in the idea."
+            "Rewrite the text below. Style: Sensory-Led. "
+            "Rules: open with a concrete sensory detail (seen, heard, felt, smelled); "
+            "ground every abstract idea in a physical object or moment; "
+            "do not use the words 'important', 'significant', or 'interesting'; "
+            "do not start with an abstract claim or statistic. "
+            "Write the rewritten text immediately. Do not add notes or commentary. Stop after the rewrite."
         ),
     },
 ]
