@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { analyzeDraft } from '@/api/client'
-import { checkHealth } from '@/api/client'
-import type { AnalyzeResponse } from '@/api/client'
+import { scoreDraft, analyzeDraft, checkHealth } from '@/api/client'
+import type { AnalyzeResponse, ScoreResult } from '@/api/client'
 import ScoreDial from '@/components/ScoreDials'
 import DirectionCards from '@/components/DirectionCards'
 import VoiceOnboarding from '@/components/VoiceOnboarding'
@@ -11,39 +10,66 @@ const PLACEHOLDER = `Paste your draft here — an opening paragraph, a caption, 
 
 export default function App() {
   const [draft, setDraft] = useState('')
+  const [scores, setScores] = useState<ScoreResult | null>(null)
   const [result, setResult] = useState<AnalyzeResponse | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [scoringLoading, setScoringLoading] = useState(false)
+  const [directionsLoading, setDirectionsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [demoMode, setDemoMode] = useState(false)
+  const [modelInfo, setModelInfo] = useState('')
 
   const { fingerprint, loading: fpLoading, error: fpError, addSamples, clearFingerprint } = useVoiceFingerprint()
 
-  // Health check on mount — sets demo mode banner
+  // Health check on mount — sets demo mode banner + model info
   useEffect(() => {
     checkHealth()
-      .then(h => setDemoMode(h.demo_mode))
+      .then(h => {
+        setDemoMode(h.demo_mode)
+        if (h.embed_model) setModelInfo(`${h.embed_model} · ${h.gen_model}`)
+      })
       .catch(() => setDemoMode(true))
   }, [])
 
   async function handleAnalyze(e: React.FormEvent) {
     e.preventDefault()
     if (!draft.trim()) return
-    setLoading(true)
+
+    const samples = fingerprint.isActive ? fingerprint.samples : undefined
     setError(null)
     setResult(null)
+    setScores(null)
+
+    // Phase 1: scores only — fast, shows dials animating
+    setScoringLoading(true)
     try {
-      const res = await analyzeDraft(
-        draft.trim(),
-        fingerprint.isActive ? fingerprint.samples : undefined,
-      )
-      setResult(res)
-      if (res.demo_mode) setDemoMode(true)
+      const scoreRes = await scoreDraft(draft.trim(), samples)
+      setScores(scoreRes.scores)
+      if (scoreRes.demo_mode) setDemoMode(true)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Analysis failed. Please try again.')
+      setError(err instanceof Error ? err.message : 'Scoring failed. Please try again.')
+      setScoringLoading(false)
+      return
     } finally {
-      setLoading(false)
+      setScoringLoading(false)
+    }
+
+    // Phase 2: full directions — slower, cards appear after dials
+    setDirectionsLoading(true)
+    try {
+      const fullRes = await analyzeDraft(draft.trim(), samples)
+      setResult(fullRes)
+      setScores(fullRes.scores)
+      if (fullRes.demo_mode) setDemoMode(true)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Direction generation failed.'
+      // If backend timed out internally it falls back to fixtures — surface that clearly
+      setError(msg.includes('timed out') ? `${msg} Scores above are still valid.` : msg)
+    } finally {
+      setDirectionsLoading(false)
     }
   }
+
+  const loading = scoringLoading || directionsLoading
 
   return (
     <div style={styles.root}>
@@ -52,6 +78,9 @@ export default function App() {
         <div style={styles.headerInner}>
           <div style={styles.logo}>Stilliu</div>
           <div style={styles.tagline}>Find what makes your writing unmistakable.</div>
+          {modelInfo && !demoMode && (
+            <div style={styles.modelInfo}>{modelInfo}</div>
+          )}
           {demoMode && (
             <div style={styles.demoBanner}>
               Demo mode — fixture responses · no API calls
@@ -77,17 +106,17 @@ export default function App() {
               style={loading ? { ...styles.submitBtn, opacity: 0.6 } : styles.submitBtn}
               disabled={loading || !draft.trim()}
             >
-              {loading ? 'Analysing…' : 'Analyse'}
+              {scoringLoading ? 'Measuring…' : directionsLoading ? 'Generating directions…' : 'Analyse'}
             </button>
           </form>
 
           {error && <div style={styles.errorMsg}>{error}</div>}
 
-          {/* Score dials */}
+          {/* Score dials — update from Phase 1 (scores) immediately */}
           <div style={styles.dialsRow}>
             <ScoreDial
               label="Generic Score"
-              value={result?.scores.generic_distance ?? null}
+              value={scores?.generic_distance ?? null}
               subtitle="How close to a bland AI default"
               lowLabel="Distinctive"
               highLabel="Generic"
@@ -95,7 +124,7 @@ export default function App() {
             />
             <ScoreDial
               label="Voice Distance"
-              value={result?.scores.voice_distance ?? null}
+              value={scores?.voice_distance ?? null}
               subtitle={fingerprint.isActive ? 'Drift from your voice' : 'Add samples to unlock'}
               lowLabel="Your voice"
               highLabel="Drifting"
@@ -118,7 +147,7 @@ export default function App() {
           <div style={styles.panelTitle}>Divergent Directions</div>
           <DirectionCards
             cards={result?.directions ?? []}
-            loading={loading}
+            loading={directionsLoading}
           />
         </div>
       </main>
@@ -155,6 +184,16 @@ const styles: Record<string, React.CSSProperties> = {
   tagline: {
     fontSize: '13px',
     color: '#7c829e',
+  },
+  modelInfo: {
+    marginLeft: 'auto',
+    fontSize: '11px',
+    color: '#7c829e',
+    background: '#1a1d27',
+    border: '1px solid #2e3350',
+    borderRadius: '5px',
+    padding: '4px 10px',
+    fontFamily: '"Cascadia Code", "Fira Code", "Courier New", monospace',
   },
   demoBanner: {
     marginLeft: 'auto',
