@@ -145,28 +145,31 @@ Every file in this repository was authored through the Bob session. No external 
 
 ### Backend
 
-```bash
+```powershell
 cd backend
 
 # Install dependencies
 python -m venv .venv
-.venv\Scripts\activate        # Windows
+.venv\Scripts\activate
 pip install -r requirements.txt
 
 # Configure credentials
-copy .env.example .env
-# Edit .env with your WATSONX_API_KEY, WATSONX_PROJECT_ID
+# Copy .env.example to .env and fill in WATSONX_API_KEY and WATSONX_PROJECT_ID
+# Do NOT use 'copy .env.example .env' if you already have a .env — it will overwrite it
 
-# Start (live mode)
-start.bat
+# Start (live mode) — note the .\ prefix required by PowerShell
+.\start.bat
 
-# Start (demo mode — no API calls needed)
-start_demo.bat
+# Start (demo mode — no API calls, no credentials needed)
+.\start_demo.bat
 ```
+
+> **PowerShell note:** Always prefix batch files with `.\` in PowerShell (e.g. `.\start.bat`).
+> The server takes ~8s to warm up SDK clients on first start — this is expected and logged.
 
 ### Frontend
 
-```bash
+```powershell
 cd frontend
 npm install
 npm run dev
