@@ -13,14 +13,21 @@ class Settings(BaseSettings):
     watsonx_url: str = "https://eu-gb.ml.cloud.ibm.com"
 
     # Models
-    generation_model_id: str = "ibm/granite-3-8b-instruct"
-    embedding_model_id: str = "ibm/granite-embedding-125m-english"
+    # Generation: llama-3-3-70b is the best available in eu-gb region
+    generation_model_id: str = "meta-llama/llama-3-3-70b-instruct"
+    # Embedding: IBM Granite multilingual embedding (eu-gb available)
+    embedding_model_id: str = "ibm/granite-embedding-278m-multilingual"
 
     # Demo / fallback mode — set DEMO_MODE=true to serve fixture responses
     demo_mode: bool = False
 
-    # API timeouts (seconds)
-    watsonx_timeout: int = 8
+    # Timeouts (seconds) — based on measured eu-gb latency:
+    #   embed call (warm):  ~1s  |  cold: ~8s
+    #   generate (warm):    ~8s  |  cold: ~12s
+    #   score_timeout covers: embed + generate + embed = ~12s warm / ~28s cold
+    #   analyze_timeout covers: score + 3x parallel generate + 3x embed = ~25s warm
+    score_timeout: int = 60
+    analyze_timeout: int = 120
 
     model_config = SettingsConfigDict(
         env_file=".env",

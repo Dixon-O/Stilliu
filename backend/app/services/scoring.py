@@ -6,27 +6,38 @@ Raw cosine distances are real and defensible; the 0–100 display values
 are linearly normalised against known anchors so they feel meaningful
 to a non-technical user without being fake.
 
-Calibration anchors (manually verified against Granite embeddings):
-  GENERIC_FLOOR  — cosine distance of a human distinctive text vs its own
-                   bland baseline (high distance = distinctive = low score)
-  GENERIC_CEILING — cosine distance of an AI-generated text vs its own
-                    baseline (low distance = generic = high score)
+Calibration anchors — derived from live Granite embedding probe (M2):
+  Corpus: bland AI pairs, distinctive human pairs, mixed medium.
+  Embedding model: ibm/granite-embedding-278m-multilingual (768-dim).
+
+  Observed distances:
+    bland_ai vs bland_ai      → 0.089  (very generic, close together)
+    distinct vs distinct       → 0.281  (distinctive but same style)
+    bland vs distinct          → 0.461–0.501  (clear cross-style gap)
+    draft vs its own baseline  → 0.348  (real-world typical case)
+
+  Mapping intent:
+    raw ~0.09 → display ~100 (very generic, matches its own bland baseline)
+    raw ~0.35 → display ~50  (typical draft — in the interesting middle)
+    raw ~0.50 → display ~0   (maximally distinctive, nothing like the baseline)
 """
 from __future__ import annotations
 import numpy as np
 from app.services.embeddings import cosine_distance
 
-# ── Calibration constants ────────────────────────────────────────────────────
-# These are set conservatively so normal human writing maps to 20–80 on the
-# display scale. Adjust after M2 live testing if needed.
+# ── Calibration constants (live-probed, M2) ──────────────────────────────────
 
 # Generic distance: high raw distance → more distinctive → lower display score
-GENERIC_DIST_FLOOR = 0.05    # raw dist at which we display ~0 (very generic)
-GENERIC_DIST_CEIL = 0.55     # raw dist at which we display ~100 (very distinctive)
+# Floor: bland-vs-bland baseline (0.089) → display 100 (very generic)
+# Ceil:  distinctive-vs-baseline (0.50)  → display 0   (very distinctive)
+GENERIC_DIST_FLOOR = 0.09    # raw dist → display 100 (sounds like everyone)
+GENERIC_DIST_CEIL  = 0.50    # raw dist → display 0   (distinctly yours)
 
 # Voice distance: low raw distance → sounds like you → lower display score
-VOICE_DIST_FLOOR = 0.02      # raw dist at which we display ~0 (perfect match)
-VOICE_DIST_CEIL = 0.60       # raw dist at which we display ~100 (very different)
+# Floor: same-author repeated phrase → near 0.10
+# Ceil:  different writer entirely   → near 0.55
+VOICE_DIST_FLOOR = 0.10      # raw dist → display 0   (perfect voice match)
+VOICE_DIST_CEIL  = 0.55      # raw dist → display 100 (sounds unlike you)
 
 
 def _normalise(raw: float, floor: float, ceil: float, invert: bool = False) -> float:

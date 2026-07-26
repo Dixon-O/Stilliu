@@ -1,8 +1,10 @@
 """
 embeddings.py — Granite embedding calls and cosine distance utilities.
 
-All embedding work funnels through here so the rest of the app
-never touches the raw SDK or numpy directly.
+SDK client is cached at module level after first initialisation.
+Cold-start on a fresh Python process takes ~8–10s (IAM token + SDK init).
+Subsequent calls take ~1s. Caching eliminates the cold-start penalty on
+every request.
 """
 from __future__ import annotations
 import logging
@@ -15,68 +17,62 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# ── Module-level client cache ────────────────────────────────────────────────
+# Initialised once on first use. Eliminates the ~8s cold-start on every request.
+_embedding_client: Embeddings | None = None
 
-def _get_embedding_client() -> Embeddings:
-    settings = get_settings()
-    credentials = Credentials(
-        url=settings.watsonx_url,
-        api_key=settings.watsonx_api_key,
-    )
-    client = APIClient(credentials=credentials, project_id=settings.watsonx_project_id)
-    return Embeddings(
-        model_id=settings.embedding_model_id,
-        api_client=client,
-        params={EmbedParams.TRUNCATE_INPUT_TOKENS: 512},
-    )
+
+def get_embedding_client() -> Embeddings:
+    global _embedding_client
+    if _embedding_client is None:
+        settings = get_settings()
+        logger.info("Initialising Granite embedding client (one-time cold start)...")
+        credentials = Credentials(
+            url=settings.watsonx_url,
+            api_key=settings.watsonx_api_key,
+        )
+        api_client = APIClient(credentials=credentials, project_id=settings.watsonx_project_id)
+        _embedding_client = Embeddings(
+            model_id=settings.embedding_model_id,
+            api_client=api_client,
+            params={EmbedParams.TRUNCATE_INPUT_TOKENS: 512},
+        )
+        logger.info("Granite embedding client ready.")
+    return _embedding_client
 
 
 def embed_texts(texts: list[str]) -> np.ndarray:
     """
-    Embed a list of text strings and return a 2-D numpy array
-    of shape (len(texts), embedding_dim).
-    Each text is a paragraph or sentence-group.
+    Embed a list of text strings using the cached client.
+    Returns a 2-D numpy array of shape (len(texts), embedding_dim).
     """
     settings = get_settings()
     if settings.demo_mode:
-        # Return deterministic fake embeddings for offline use
         rng = np.random.default_rng(seed=42)
         return rng.standard_normal((len(texts), 128)).astype(np.float32)
 
-    client = _get_embedding_client()
+    client = get_embedding_client()
     response = client.embed_documents(texts=texts)
-    vectors = np.array(response, dtype=np.float32)
-    return vectors
+    return np.array(response, dtype=np.float32)
 
 
 def mean_embedding(texts: list[str]) -> np.ndarray:
-    """
-    Embed all texts and return the mean vector (centroid).
-    Used for both draft representation and voice fingerprint.
-    """
+    """Embed all texts and return the mean centroid vector."""
     vectors = embed_texts(texts)
     return vectors.mean(axis=0)
 
 
 def cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
-    """
-    Cosine distance in [0, 1].  0 = identical direction, 1 = orthogonal/opposite.
-    """
+    """Cosine distance in [0, 1]. 0 = identical direction, 1 = orthogonal."""
     a_norm = np.linalg.norm(a)
     b_norm = np.linalg.norm(b)
     if a_norm == 0 or b_norm == 0:
         return 1.0
     similarity = float(np.dot(a, b) / (a_norm * b_norm))
-    # Clamp for floating-point safety
-    similarity = max(-1.0, min(1.0, similarity))
-    return 1.0 - similarity
+    return 1.0 - max(-1.0, min(1.0, similarity))
 
 
 def split_into_paragraphs(text: str) -> list[str]:
-    """
-    Split a block of text into non-empty paragraphs.
-    Falls back to treating the whole text as one unit if no breaks found.
-    """
+    """Split text into non-empty paragraphs."""
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    if not paragraphs:
-        paragraphs = [text.strip()]
-    return paragraphs
+    return paragraphs if paragraphs else [text.strip()]

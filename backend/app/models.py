@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field
 class HealthResponse(BaseModel):
     status: str = "ok"
     demo_mode: bool
+    embed_model: str = ""
+    gen_model: str = ""
 
 
 # ── /api/analyze ─────────────────────────────────────────────────────────────
@@ -70,3 +72,16 @@ class FingerprintResponse(BaseModel):
     paragraph_count: int
     active: bool = True
     message: str
+
+
+# ── /api/score (fast path — scores only, no generation) ──────────────────────
+
+class ScoreOnlyRequest(BaseModel):
+    draft: str = Field(..., min_length=10)
+    voice_samples: Optional[list[str]] = None
+
+
+class ScoreOnlyResponse(BaseModel):
+    scores: ScoreResult
+    baseline_preview: str = Field("", description="First 120 chars of the generated baseline, for transparency.")
+    demo_mode: bool = False
