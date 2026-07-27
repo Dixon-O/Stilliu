@@ -14,6 +14,9 @@ from ibm_watsonx_ai.foundation_models import Embeddings
 from ibm_watsonx_ai.metanames import EmbedTextParamsMetaNames as EmbedParams
 
 from app.config import get_settings
+# Pure helpers live in textutil (no SDK import) so the measurement engine stays
+# testable without credentials. Re-exported here for backward compatibility.
+from app.services.textutil import cosine_distance, split_into_paragraphs  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -61,18 +64,3 @@ def mean_embedding(texts: list[str]) -> np.ndarray:
     vectors = embed_texts(texts)
     return vectors.mean(axis=0)
 
-
-def cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
-    """Cosine distance in [0, 1]. 0 = identical direction, 1 = orthogonal."""
-    a_norm = np.linalg.norm(a)
-    b_norm = np.linalg.norm(b)
-    if a_norm == 0 or b_norm == 0:
-        return 1.0
-    similarity = float(np.dot(a, b) / (a_norm * b_norm))
-    return 1.0 - max(-1.0, min(1.0, similarity))
-
-
-def split_into_paragraphs(text: str) -> list[str]:
-    """Split text into non-empty paragraphs."""
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    return paragraphs if paragraphs else [text.strip()]

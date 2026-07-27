@@ -1,109 +1,179 @@
 """
-scoring.py — Distance calculation and score normalisation.
+scoring.py — Multi-axis scoring. HIGH = GOOD everywhere.
 
-The calibration corpus defines the floor/ceiling for display scores.
-Raw cosine distances are real and defensible; the 0–100 display values
-are linearly normalised against known anchors so they feel meaningful
-to a non-technical user without being fake.
+Three axes, each 0–100 where 100 is the best possible outcome:
 
-Calibration anchors — derived from live Granite embedding probe (M2):
-  Corpus: bland AI pairs, distinctive human pairs, mixed medium.
-  Embedding model: ibm/granite-embedding-278m-multilingual (768-dim).
+  Distinctiveness  — how far the text departs from bland AI defaults.
+                     Blends semantic distance (40%) + stylometric distance (60%).
+                     60% weight on style because embeddings capture topic, not voice.
 
-  Observed distances:
-    bland_ai vs bland_ai      → 0.089  (very generic, close together)
-    distinct vs distinct       → 0.281  (distinctive but same style)
-    bland vs distinct          → 0.461–0.501  (clear cross-style gap)
-    draft vs its own baseline  → 0.348  (real-world typical case)
+  Voice Match      — how closely the text sounds like the author.
+                     Blends semantic proximity to voice centroid (50%) + style
+                     proximity to voice samples (50%).
 
-  Mapping intent:
-    raw ~0.09 → display ~100 (very generic, matches its own bland baseline)
-    raw ~0.35 → display ~50  (typical draft — in the interesting middle)
-    raw ~0.50 → display ~0   (maximally distinctive, nothing like the baseline)
+  On-Message       — semantic faithfulness to the original draft.
+                     Pure embedding proximity; guards against hallucination drift.
+
+All three are returned as absolute scores AND as deltas vs the draft so the UI
+can show "this direction is +18 more distinctive than your draft."
 """
 from __future__ import annotations
 import numpy as np
-from app.services.embeddings import cosine_distance
+from app.services.textutil import cosine_distance, clamp
+from app.services.stylometry import style_distance, mean_style_distance
 
-# ── Calibration constants (live-probed, M2) ──────────────────────────────────
+# ── Calibration anchors ───────────────────────────────────────────────────────
+# Semantic (embedding cosine distance) ranges — from live Granite probe (M2).
+# Distinctiveness: distance from generic baseline
+_DIST_SEM_FLOOR = 0.09   # bland-vs-bland → score 0  (sounds like everyone)
+_DIST_SEM_CEIL  = 0.50   # distinctive-vs-baseline → score 100
 
-# Generic distance: high raw distance → more distinctive → lower display score
-# Floor: bland-vs-bland baseline (0.089) → display 100 (very generic)
-# Ceil:  distinctive-vs-baseline (0.50)  → display 0   (very distinctive)
-GENERIC_DIST_FLOOR = 0.09    # raw dist → display 100 (sounds like everyone)
-GENERIC_DIST_CEIL  = 0.50    # raw dist → display 0   (distinctly yours)
+# Voice match: distance from author centroid
+_VOICE_SEM_FLOOR = 0.10  # same-author → score 100  (perfect match)
+_VOICE_SEM_CEIL  = 0.55  # different writer → score 0
 
-# Voice distance: low raw distance → sounds like you → lower display score
-# Floor: same-author repeated phrase → near 0.10
-# Ceil:  different writer entirely   → near 0.55
-VOICE_DIST_FLOOR = 0.10      # raw dist → display 0   (perfect voice match)
-VOICE_DIST_CEIL  = 0.55      # raw dist → display 100 (sounds unlike you)
+# On-message: distance from original draft
+_MSG_SEM_FLOOR = 0.05    # near-identical → score 100
+_MSG_SEM_CEIL  = 0.45    # heavily rewritten → score 0
+
+# Style distance is already in [0, 1] from stylometry.style_distance.
+# No additional calibration needed; multiply by 100 to get display units.
 
 
-def _normalise(raw: float, floor: float, ceil: float, invert: bool = False) -> float:
+def _sem_to_display(raw: float, floor: float, ceil: float, high_is_far: bool) -> float:
     """
-    Linearly map raw ∈ [floor, ceil] to display ∈ [0, 100].
-    Clamps values outside the calibrated range.
-    If invert=True, a higher raw value → lower display score.
+    Map a cosine distance to a 0–100 display score.
+    high_is_far=True  → larger distance = higher score (distinctiveness).
+    high_is_far=False → smaller distance = higher score (voice match, on-message).
     """
-    clamped = max(floor, min(ceil, raw))
-    normalised = (clamped - floor) / (ceil - floor) * 100.0
-    if invert:
-        normalised = 100.0 - normalised
-    return round(normalised, 1)
+    span = ceil - floor if ceil > floor else 1.0
+    normalised = clamp((raw - floor) / span, 0.0, 1.0) * 100.0
+    return round(normalised if high_is_far else 100.0 - normalised, 1)
 
 
-def compute_generic_score(
-    draft_vector: np.ndarray,
+# ── Public scoring functions ──────────────────────────────────────────────────
+
+def compute_distinctiveness(
+    text_vector: np.ndarray,
     baseline_vector: np.ndarray,
-) -> tuple[float, float]:
+    text_str: str,
+    baseline_str: str,
+) -> tuple[float, float, float]:
     """
-    Returns (display_score, raw_distance).
-    display_score: 0 = maximally distinctive, 100 = sounds like bland AI default.
-    High raw distance → low display score (distinctive).
-    Low raw distance → high display score (generic).
+    Returns (score_0_100, raw_semantic_dist, raw_style_dist).
+    100 = maximally distinctive from the generic AI baseline.
     """
-    raw = cosine_distance(draft_vector, baseline_vector)
-    # High distance from baseline = distinctive = LOW generic score → invert=True
-    display = _normalise(raw, GENERIC_DIST_FLOOR, GENERIC_DIST_CEIL, invert=True)
-    return display, raw
+    raw_sem = cosine_distance(text_vector, baseline_vector)
+    raw_sty = style_distance(text_str, baseline_str)
+
+    sem_score = _sem_to_display(raw_sem, _DIST_SEM_FLOOR, _DIST_SEM_CEIL, high_is_far=True)
+    sty_score = clamp(raw_sty * 100.0, 0.0, 100.0)
+
+    score = round(0.4 * sem_score + 0.6 * sty_score, 1)
+    return score, raw_sem, raw_sty
 
 
-def compute_voice_score(
-    draft_vector: np.ndarray,
+def compute_voice_match(
+    text_vector: np.ndarray,
     voice_centroid: np.ndarray,
+    text_str: str,
+    voice_samples: list[str],
+) -> tuple[float, float, float]:
+    """
+    Returns (score_0_100, raw_semantic_dist, raw_style_dist).
+    100 = sounds exactly like the author.
+    """
+    raw_sem = cosine_distance(text_vector, voice_centroid)
+    raw_sty = mean_style_distance(text_str, voice_samples) if voice_samples else 0.5
+
+    sem_score = _sem_to_display(raw_sem, _VOICE_SEM_FLOOR, _VOICE_SEM_CEIL, high_is_far=False)
+    sty_score = clamp((1.0 - raw_sty) * 100.0, 0.0, 100.0)  # invert: close = good
+
+    score = round(0.5 * sem_score + 0.5 * sty_score, 1)
+    return score, raw_sem, raw_sty
+
+
+def compute_on_message(
+    text_vector: np.ndarray,
+    draft_vector: np.ndarray,
 ) -> tuple[float, float]:
     """
-    Returns (display_score, raw_distance).
-    display_score: 0 = sounds exactly like you, 100 = sounds nothing like you.
-    Low raw distance → low display score (sounds like you).
+    Returns (score_0_100, raw_semantic_dist).
+    100 = semantically faithful to the original draft.
     """
-    raw = cosine_distance(draft_vector, voice_centroid)
-    # Low distance from voice = sounds like you = LOW voice-distance score → invert=False
-    display = _normalise(raw, VOICE_DIST_FLOOR, VOICE_DIST_CEIL, invert=False)
-    return display, raw
+    raw_sem = cosine_distance(text_vector, draft_vector)
+    score = _sem_to_display(raw_sem, _MSG_SEM_FLOOR, _MSG_SEM_CEIL, high_is_far=False)
+    return score, raw_sem
 
 
-def score_summary(generic_display: float, voice_display: float | None) -> str:
+def score_axes(
+    *,
+    draft_vector: np.ndarray,
+    draft_str: str,
+    baseline_vector: np.ndarray,
+    baseline_str: str,
+    voice_centroid: np.ndarray,
+    voice_samples: list[str],
+    direction_vector: np.ndarray,
+    direction_str: str,
+) -> dict:
     """
-    Returns a human-readable one-liner for the score state.
-    Used in API responses and as prompt context.
+    Compute all three axes for a direction AND for the draft, returning
+    absolute scores plus deltas (direction − draft, positive = improvement).
+
+    Returned dict keys:
+      distinctiveness, voice_match, on_message          — direction scores (0-100)
+      draft_distinctiveness, draft_voice_match           — draft baselines
+      delta_distinctiveness, delta_voice_match,
+      delta_on_message                                   — direction − draft
+      raw_*                                              — raw distances for debugging
     """
-    g = generic_display
-    label = (
-        "highly distinctive" if g < 30 else
-        "moderately distinctive" if g < 55 else
-        "leaning generic" if g < 75 else
-        "strongly generic"
-    )
-    base = f"Generic score: {g:.0f}/100 ({label})"
-    if voice_display is not None:
-        v = voice_display
-        voice_label = (
-            "clearly your voice" if v < 30 else
-            "mostly your voice" if v < 55 else
-            "drifting from your voice" if v < 75 else
-            "significantly unlike your voice"
-        )
-        return f"{base} · Voice drift: {v:.0f}/100 ({voice_label})"
-    return base
+    dir_dist,  dir_dist_sem,  dir_dist_sty  = compute_distinctiveness(
+        direction_vector, baseline_vector, direction_str, baseline_str)
+    dir_voice, dir_voice_sem, dir_voice_sty = compute_voice_match(
+        direction_vector, voice_centroid, direction_str, voice_samples)
+    dir_msg,   dir_msg_sem                  = compute_on_message(
+        direction_vector, draft_vector)
+
+    dft_dist,  _,  _ = compute_distinctiveness(
+        draft_vector, baseline_vector, draft_str, baseline_str)
+    dft_voice, _,  _ = compute_voice_match(
+        draft_vector, voice_centroid, draft_str, voice_samples)
+
+    return {
+        # Direction absolute scores
+        "distinctiveness":       dir_dist,
+        "voice_match":           dir_voice,
+        "on_message":            dir_msg,
+        # Draft baselines (for delta display)
+        "draft_distinctiveness": dft_dist,
+        "draft_voice_match":     dft_voice,
+        # Deltas — positive means the direction improved on the draft
+        "delta_distinctiveness": round(dir_dist  - dft_dist,  1),
+        "delta_voice_match":     round(dir_voice - dft_voice, 1),
+        "delta_on_message":      round(dir_msg   - 50.0,      1),  # 50 = neutral midpoint
+        # Raw distances for debugging / calibration
+        "raw_dist_sem":          round(dir_dist_sem,  4),
+        "raw_dist_sty":          round(dir_dist_sty,  4),
+        "raw_voice_sem":         round(dir_voice_sem, 4),
+        "raw_voice_sty":         round(dir_voice_sty, 4),
+        "raw_msg_sem":           round(dir_msg_sem,   4),
+    }
+
+
+def score_summary(axes: dict) -> str:
+    """One-liner for prompt context and API responses."""
+    d = axes["distinctiveness"]
+    v = axes.get("voice_match")
+    m = axes["on_message"]
+    dist_label = "highly distinctive" if d >= 70 else "moderately distinctive" if d >= 45 else "leaning generic"
+    msg_label  = "faithful"           if m >= 70 else "moderate drift"          if m >= 45 else "heavy drift"
+    parts = [
+        f"Distinctiveness {d:.0f}/100 ({dist_label})",
+    ]
+    if v is not None:
+        voice_label = "strong voice match" if v >= 70 else "partial voice match" if v >= 45 else "voice drift"
+        parts.append(f"Voice {v:.0f}/100 ({voice_label})")
+    parts.append(f"On-message {m:.0f}/100 ({msg_label})")
+    return " · ".join(parts)
+
