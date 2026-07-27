@@ -3,63 +3,65 @@ main.py — FastAPI application entry point.
 
 Routes:
   GET  /health                   → liveness check
-  POST /api/analyze              → score a draft + generate directions
+  POST /api/score                → fast path: draft scores only, no generation
+  POST /api/analyze              → score draft + generate + score directions
   POST /api/fingerprint/validate → validate voice samples (count/length check)
 """
 from __future__ import annotations
-import json
 import logging
 import asyncio
-from pathlib import Path
 from contextlib import asynccontextmanager
 
-import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.models import (
     HealthResponse,
-    AnalyzeRequest,
-    AnalyzeResponse,
-    ScoreResult,
-    ScoreOnlyRequest,
-    ScoreOnlyResponse,
-    DirectionCard,
-    FingerprintRequest,
-    FingerprintResponse,
+    AnalyzeRequest, AnalyzeResponse,
+    AxisScores, AxisDeltas, DraftScores, DirectionCard,
+    ScoreOnlyRequest, ScoreOnlyResponse,
+    FingerprintRequest, FingerprintResponse,
 )
 from app.services.embeddings import mean_embedding, split_into_paragraphs
-from app.services.fingerprint import build_voice_centroid, extract_style_signals
-from app.services.generation import generate_baseline, generate_divergent_directions
-from app.services.scoring import compute_generic_score, compute_voice_score
+from app.services.generation import (
+    generate_baseline, generate_divergent_directions, regenerate_direction,
+)
+from app.services.scoring import (
+    compute_distinctiveness, compute_voice_match, score_axes, score_summary,
+)
+from app.services.guardrails import check_faithfulness
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 logger = logging.getLogger(__name__)
 
-FIXTURES_PATH = Path(__file__).parent / "fixtures" / "demo_responses.json"
+# ── Refine loop config ────────────────────────────────────────────────────────
+# A direction is "weak" and worth regenerating if any of these thresholds fail.
+REFINE_DISTINCTIVENESS_MIN = 30   # below this → too generic, regenerate
+REFINE_FAITHFULNESS_MIN    = 60   # below this → too many hallucinations, regenerate
 
+
+# ── Lifespan ──────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info(
-        "Stilliu backend starting. demo_mode=%s  embed=%s  gen=%s",
+        "Stilliu backend starting. demo_mode=%s  embed=%s  gen=%s  baseline=%s",
         settings.demo_mode,
         settings.embedding_model_id,
         settings.generation_model_id,
+        settings.baseline_model_id,
     )
     if not settings.demo_mode:
-        # Warm up both SDK clients at startup so first request is not cold.
-        # Cold-start takes ~8–10s; warming here means request 1 is as fast as request 2.
-        import asyncio
         from app.services.embeddings import get_embedding_client
-        from app.services.generation import get_generation_client
+        from app.services.generation import get_generation_client, get_baseline_client
         loop = asyncio.get_event_loop()
         logger.info("Warming up SDK clients (one-time ~10s)...")
         await asyncio.gather(
             loop.run_in_executor(None, get_embedding_client),
             loop.run_in_executor(None, get_generation_client),
+            loop.run_in_executor(None, get_baseline_client),
         )
         logger.info("SDK clients warmed up. Ready to serve requests.")
     yield
@@ -68,7 +70,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Stilliu API",
-    version="0.1.0",
+    version="0.2.0",
     description="Measures creative distinctiveness and generates divergent directions.",
     lifespan=lifespan,
 )
@@ -82,9 +84,69 @@ app.add_middleware(
 )
 
 
-def _load_fixture(key: str) -> dict:
-    with open(FIXTURES_PATH, encoding="utf-8") as f:
-        return json.load(f)[key]
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _fixture_analyze_response() -> AnalyzeResponse:
+    """Hardcoded fixture so the demo never breaks regardless of schema changes."""
+    draft_scores = DraftScores(
+        distinctiveness=38.0,
+        voice_match=None,
+        summary="Distinctiveness 38/100 (leaning generic) · no voice samples",
+    )
+    directions = [
+        DirectionCard(
+            persona="Sparse Minimalist",
+            persona_description="Short sentences. Nothing decorative. Meaning carried by what is left out.",
+            text=(
+                "AI erases voices. Not through malice — through averaging. "
+                "Every writer who leans on it drifts toward the mean. "
+                "The work gets cleaner. Blander. Safer. That's the cost nobody mentions."
+            ),
+            scores=AxisScores(distinctiveness=78.0, voice_match=None, on_message=72.0),
+            deltas=AxisDeltas(distinctiveness=40.0, voice_match=None, on_message=22.0),
+            faithfulness=100,
+            unsupported_claims=[],
+            summary="Distinctiveness 78/100 · On-message 72/100",
+            refined=False,
+        ),
+        DirectionCard(
+            persona="The Arguer",
+            persona_description="Leads with a bold claim. Builds a case. Anticipates pushback and answers it.",
+            text=(
+                "AI homogenisation is the most underreported threat to writing culture right now. "
+                "Yes, individual quality improves. But read a hundred AI-assisted essays and you'll "
+                "find the same cadence, the same hedges, the same arc. The counterargument is that "
+                "good ideas transcend style. That's wrong. Style is how an idea becomes yours."
+            ),
+            scores=AxisScores(distinctiveness=71.0, voice_match=None, on_message=81.0),
+            deltas=AxisDeltas(distinctiveness=33.0, voice_match=None, on_message=31.0),
+            faithfulness=100,
+            unsupported_claims=[],
+            summary="Distinctiveness 71/100 · On-message 81/100",
+            refined=False,
+        ),
+        DirectionCard(
+            persona="Sensory-Led",
+            persona_description="Grounds ideas in physical sensation, texture, and concrete scene.",
+            text=(
+                "Paste your draft into any AI assistant. Watch it come back smoother, rounder, "
+                "emptier — like river stones that lost their edges in the current. That's what "
+                "homogenisation feels like from the inside: not loss, but a quiet erasure of the grain."
+            ),
+            scores=AxisScores(distinctiveness=83.0, voice_match=None, on_message=68.0),
+            deltas=AxisDeltas(distinctiveness=45.0, voice_match=None, on_message=18.0),
+            faithfulness=100,
+            unsupported_claims=[],
+            summary="Distinctiveness 83/100 · On-message 68/100",
+            refined=False,
+        ),
+    ]
+    return AnalyzeResponse(
+        draft_scores=draft_scores,
+        directions=directions,
+        baseline_preview="This text explores an important topic that many people find relevant today...",
+        demo_mode=True,
+    )
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -97,69 +159,78 @@ async def health():
         demo_mode=settings.demo_mode,
         embed_model=settings.embedding_model_id,
         gen_model=settings.generation_model_id,
+        baseline_model=settings.baseline_model_id,
     )
 
 
 @app.post("/api/score", response_model=ScoreOnlyResponse)
 async def score_only(req: ScoreOnlyRequest):
     """
-    Fast path — returns Generic Distance + Voice Distance scores only.
-    No divergent generation. Typically resolves in ~2–4s vs ~20s for full analyze.
+    Fast path — returns draft scores only, no generation.
     Use this to show live score dials before the full analyze call completes.
     """
     settings = get_settings()
 
     if settings.demo_mode:
-        fixture = _load_fixture("analyze")
+        fixture = _fixture_analyze_response()
         return ScoreOnlyResponse(
-            scores=ScoreResult(**fixture["scores"]),
-            baseline_preview="This topic is important and relevant today. There are many key points to consider...",
+            draft_scores=fixture.draft_scores,
+            baseline_preview=fixture.baseline_preview,
             demo_mode=True,
         )
 
     try:
-        async def _run_scoring():
+        async def _run():
             loop = asyncio.get_event_loop()
-
             draft_paras = split_into_paragraphs(req.draft)
-            # Run draft embedding + baseline generation concurrently
-            draft_vec_fut = loop.run_in_executor(None, mean_embedding, draft_paras)
-            baseline_text_fut = loop.run_in_executor(None, generate_baseline, req.draft)
-
-            draft_vec, baseline_text = await asyncio.gather(draft_vec_fut, baseline_text_fut)
-
+            draft_vec, baseline_text = await asyncio.gather(
+                loop.run_in_executor(None, mean_embedding, draft_paras),
+                loop.run_in_executor(None, generate_baseline, req.draft),
+            )
             baseline_paras = split_into_paragraphs(baseline_text)
             baseline_vec = await loop.run_in_executor(None, mean_embedding, baseline_paras)
 
-            generic_display, generic_raw = compute_generic_score(draft_vec, baseline_vec)
+            dist_score, _, _ = compute_distinctiveness(
+                draft_vec, baseline_vec, req.draft, baseline_text)
 
-            voice_display: float | None = None
-            voice_raw: float | None = None
-
+            voice_score: float | None = None
             if req.voice_samples:
+                from app.services.fingerprint import build_voice_centroid
                 voice_centroid = await loop.run_in_executor(
-                    None, build_voice_centroid, req.voice_samples
-                )
-                voice_display, voice_raw = compute_voice_score(draft_vec, voice_centroid)
+                    None, build_voice_centroid, req.voice_samples)
+                voice_score, _, _ = compute_voice_match(
+                    draft_vec, voice_centroid, req.draft, req.voice_samples)
 
+            draft_scores = DraftScores(
+                distinctiveness=dist_score,
+                voice_match=voice_score,
+                summary=score_summary({
+                    "distinctiveness": dist_score,
+                    "voice_match": voice_score,
+                    "on_message": 100.0,
+                    "draft_distinctiveness": dist_score,
+                    "draft_voice_match": voice_score,
+                    "delta_distinctiveness": 0.0,
+                    "delta_voice_match": 0.0,
+                    "delta_on_message": 0.0,
+                    "raw_dist_sem": 0.0, "raw_dist_sty": 0.0,
+                    "raw_voice_sem": 0.0, "raw_voice_sty": 0.0,
+                    "raw_msg_sem": 0.0,
+                }),
+            )
             return ScoreOnlyResponse(
-                scores=ScoreResult(
-                    generic_distance=generic_display,
-                    voice_distance=voice_display,
-                    generic_raw=generic_raw,
-                    voice_raw=voice_raw,
-                ),
-                baseline_preview=baseline_text[:120].strip(),
+                draft_scores=draft_scores,
+                baseline_preview=baseline_text[:160].strip(),
                 demo_mode=False,
             )
 
-        return await asyncio.wait_for(_run_scoring(), timeout=settings.score_timeout)
+        return await asyncio.wait_for(_run(), timeout=settings.score_timeout)
 
     except asyncio.TimeoutError:
         logger.warning("Score-only timed out — returning fixture fallback.")
-        fixture = _load_fixture("analyze")
+        fixture = _fixture_analyze_response()
         return ScoreOnlyResponse(
-            scores=ScoreResult(**fixture["scores"]),
+            draft_scores=fixture.draft_scores,
             baseline_preview="[timeout — fixture fallback]",
             demo_mode=True,
         )
@@ -172,79 +243,158 @@ async def score_only(req: ScoreOnlyRequest):
 async def analyze(req: AnalyzeRequest):
     settings = get_settings()
 
-    # ── Demo / fixture mode ───────────────────────────────────────────────
     if settings.demo_mode:
-        fixture = _load_fixture("analyze")
-        return AnalyzeResponse(**fixture)
+        return _fixture_analyze_response()
 
-    # ── Live mode ─────────────────────────────────────────────────────────
     try:
-        async def _run_analysis():
+        async def _run():
             loop = asyncio.get_event_loop()
+            controls = req.controls
 
-            # Phase A: draft embedding + baseline generation — run CONCURRENTLY
+            # ── Phase A: draft embed + baseline generation (concurrent) ──────
             draft_paras = split_into_paragraphs(req.draft)
             draft_vec, baseline_text = await asyncio.gather(
                 loop.run_in_executor(None, mean_embedding, draft_paras),
                 loop.run_in_executor(None, generate_baseline, req.draft),
             )
 
-            # Phase B: baseline embedding + voice fingerprint — run CONCURRENTLY
+            # ── Phase B: baseline embed + voice centroid (concurrent) ────────
             baseline_paras = split_into_paragraphs(baseline_text)
+            voice_samples = req.voice_samples or []
 
-            if req.voice_samples:
+            if voice_samples:
+                from app.services.fingerprint import build_voice_centroid
                 baseline_vec, voice_centroid = await asyncio.gather(
                     loop.run_in_executor(None, mean_embedding, baseline_paras),
-                    loop.run_in_executor(None, build_voice_centroid, req.voice_samples),
+                    loop.run_in_executor(None, build_voice_centroid, voice_samples),
                 )
-                voice_display, voice_raw = compute_voice_score(draft_vec, voice_centroid)
-                style_signals = extract_style_signals(req.voice_samples)
             else:
                 baseline_vec = await loop.run_in_executor(None, mean_embedding, baseline_paras)
-                voice_display, voice_raw, style_signals = None, None, None
+                voice_centroid = None
 
-            generic_display, generic_raw = compute_generic_score(draft_vec, baseline_vec)
+            # ── Draft scores ─────────────────────────────────────────────────
+            draft_dist, _, _ = compute_distinctiveness(
+                draft_vec, baseline_vec, req.draft, baseline_text)
+            draft_voice: float | None = None
+            if voice_centroid is not None:
+                draft_voice, _, _ = compute_voice_match(
+                    draft_vec, voice_centroid, req.draft, voice_samples)
 
-            # Phase C: 3 persona directions — generated in PARALLEL via ThreadPoolExecutor
-            # (generate_divergent_directions handles parallelism internally)
-            raw_directions = await loop.run_in_executor(
-                None, generate_divergent_directions, req.draft, style_signals
+            draft_scores = DraftScores(
+                distinctiveness=draft_dist,
+                voice_match=draft_voice,
             )
 
-            # Phase D: embed all 3 directions CONCURRENTLY to score them
-            async def _embed_and_score(d: dict) -> DirectionCard:
+            # ── Phase C: generate directions (parallel inside executor) ──────
+            raw_directions = await loop.run_in_executor(
+                None, generate_divergent_directions, req.draft, voice_samples, controls
+            )
+
+            # ── Phase D: embed + score + faithfulness check each direction ───
+            source_pool = [req.draft] + voice_samples
+
+            async def _score_direction(d: dict) -> DirectionCard:
                 dir_paras = split_into_paragraphs(d["text"])
                 dir_vec = await loop.run_in_executor(None, mean_embedding, dir_paras)
-                dir_generic, _ = compute_generic_score(dir_vec, baseline_vec)
+
+                vc = voice_centroid if voice_centroid is not None else draft_vec
+                axes = score_axes(
+                    draft_vector=draft_vec,
+                    draft_str=req.draft,
+                    baseline_vector=baseline_vec,
+                    baseline_str=baseline_text,
+                    voice_centroid=vc,
+                    voice_samples=voice_samples,
+                    direction_vector=dir_vec,
+                    direction_str=d["text"],
+                )
+
+                faith_score, unsupported = check_faithfulness(d["text"], source_pool)
+                refined = False
+
+                # ── Refine loop: regenerate if weak ──────────────────────────
+                needs_refine = (
+                    axes["distinctiveness"] < REFINE_DISTINCTIVENESS_MIN
+                    or (controls.preserve_facts and faith_score < REFINE_FAITHFULNESS_MIN)
+                )
+                if needs_refine:
+                    feedback_parts = []
+                    if axes["distinctiveness"] < REFINE_DISTINCTIVENESS_MIN:
+                        feedback_parts.append(
+                            f"distinctiveness too low ({axes['distinctiveness']:.0f}/100) — "
+                            "push the style further from generic AI prose"
+                        )
+                    if controls.preserve_facts and faith_score < REFINE_FAITHFULNESS_MIN:
+                        feedback_parts.append(
+                            f"faithfulness too low ({faith_score}/100) — "
+                            f"remove invented claims: {', '.join(unsupported[:3])}"
+                        )
+                    feedback = "; ".join(feedback_parts)
+                    new_d = await loop.run_in_executor(
+                        None, regenerate_direction,
+                        req.draft, d["name"], d["description"],
+                        voice_samples, controls, feedback,
+                    )
+                    new_paras = split_into_paragraphs(new_d["text"])
+                    new_vec = await loop.run_in_executor(None, mean_embedding, new_paras)
+                    axes = score_axes(
+                        draft_vector=draft_vec,
+                        draft_str=req.draft,
+                        baseline_vector=baseline_vec,
+                        baseline_str=baseline_text,
+                        voice_centroid=vc,
+                        voice_samples=voice_samples,
+                        direction_vector=new_vec,
+                        direction_str=new_d["text"],
+                    )
+                    faith_score, unsupported = check_faithfulness(new_d["text"], source_pool)
+                    d = new_d
+                    refined = True
+
+                voice_score = axes["voice_match"] if voice_centroid is not None else None
+                # Don't let the summary claim a voice match when there are no
+                # voice samples — the axes value is a draft-vs-draft artifact.
+                summary_axes = dict(axes)
+                if voice_centroid is None:
+                    summary_axes["voice_match"] = None
                 return DirectionCard(
                     persona=d["name"],
                     persona_description=d["description"],
                     text=d["text"],
-                    generic_distance=dir_generic,
+                    scores=AxisScores(
+                        distinctiveness=axes["distinctiveness"],
+                        voice_match=voice_score,
+                        on_message=axes["on_message"],
+                    ),
+                    deltas=AxisDeltas(
+                        distinctiveness=axes["delta_distinctiveness"],
+                        voice_match=axes["delta_voice_match"] if voice_centroid is not None else None,
+                        on_message=axes["delta_on_message"],
+                    ),
+                    faithfulness=faith_score,
+                    unsupported_claims=unsupported,
+                    summary=score_summary(summary_axes),
+                    refined=refined,
                 )
 
             direction_cards = list(await asyncio.gather(
-                *[_embed_and_score(d) for d in raw_directions]
+                *[_score_direction(d) for d in raw_directions]
             ))
 
             return AnalyzeResponse(
-                scores=ScoreResult(
-                    generic_distance=generic_display,
-                    voice_distance=voice_display,
-                    generic_raw=generic_raw,
-                    voice_raw=voice_raw,
-                ),
+                draft_scores=draft_scores,
                 directions=direction_cards,
+                baseline_preview=baseline_text[:160].strip(),
                 demo_mode=False,
             )
 
-        return await asyncio.wait_for(_run_analysis(), timeout=settings.analyze_timeout)
+        return await asyncio.wait_for(_run(), timeout=settings.analyze_timeout)
 
     except asyncio.TimeoutError:
         logger.warning("Analysis timed out — returning fixture fallback.")
-        fixture = _load_fixture("analyze")
-        fixture["demo_mode"] = True
-        return AnalyzeResponse(**fixture)
+        fixture = _fixture_analyze_response()
+        fixture.demo_mode = True
+        return fixture
     except Exception as exc:
         logger.error("Analysis error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
@@ -253,9 +403,7 @@ async def analyze(req: AnalyzeRequest):
 @app.post("/api/fingerprint/validate", response_model=FingerprintResponse)
 async def validate_fingerprint(req: FingerprintRequest):
     """Validate voice samples without computing embeddings — fast UX feedback."""
-    para_count = sum(
-        len(split_into_paragraphs(s)) for s in req.samples
-    )
+    para_count = sum(len(split_into_paragraphs(s)) for s in req.samples)
     return FingerprintResponse(
         sample_count=len(req.samples),
         paragraph_count=para_count,

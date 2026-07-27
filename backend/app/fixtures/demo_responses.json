@@ -1,33 +1,52 @@
 {
+  "_note": "REFERENCE ONLY. The live demo fixtures are generated inline by _fixture_analyze_response() in app/main.py; nothing loads this file at runtime. Kept as a human-readable example of the current three-axis response shape (HIGH = GOOD on every axis). Safe to delete.",
   "health": {
     "status": "ok",
-    "demo_mode": true
+    "demo_mode": true,
+    "embed_model": "ibm/granite-embedding-278m-multilingual",
+    "gen_model": "meta-llama/llama-3-3-70b-instruct",
+    "baseline_model": "ibm/granite-3-3-8b-instruct"
   },
   "analyze": {
-    "scores": {
-      "generic_distance": 71.0,
-      "voice_distance": 38.5,
-      "generic_raw": 0.18,
-      "voice_raw": 0.23
+    "draft_scores": {
+      "distinctiveness": 38.0,
+      "voice_match": null,
+      "summary": "Distinctiveness 38/100 (leaning generic) · no voice samples"
     },
+    "baseline_preview": "This text explores an important topic that many people find relevant today...",
     "directions": [
       {
         "persona": "Sparse Minimalist",
         "persona_description": "Short sentences. Nothing decorative. Meaning carried by what is left out.",
         "text": "AI erases voices. Not through malice — through averaging. Every writer who leans on it drifts toward the mean. The work gets cleaner. Blander. Safer. That's the cost nobody mentions.",
-        "generic_distance": 28.0
+        "scores": { "distinctiveness": 78.0, "voice_match": null, "on_message": 72.0 },
+        "deltas": { "distinctiveness": 40.0, "voice_match": null, "on_message": 22.0 },
+        "faithfulness": 100,
+        "unsupported_claims": [],
+        "summary": "Distinctiveness 78/100 · On-message 72/100",
+        "refined": false
       },
       {
         "persona": "The Arguer",
         "persona_description": "Leads with a bold claim. Builds a case. Anticipates pushback and answers it.",
-        "text": "AI homogenisation is the most underreported threat to writing culture right now. Yes, individual quality improves — Doshi and Hauser proved it. But read a hundred AI-assisted essays and you'll find the same cadence, the same hedges, the same arc. The counterargument is that good ideas transcend style. That's wrong. Style is how an idea becomes yours.",
-        "generic_distance": 22.5
+        "text": "AI homogenisation is the most underreported threat to writing culture right now. Yes, individual quality improves. But read a hundred AI-assisted essays and you'll find the same cadence, the same hedges, the same arc. The counterargument is that good ideas transcend style. That's wrong. Style is how an idea becomes yours.",
+        "scores": { "distinctiveness": 71.0, "voice_match": null, "on_message": 81.0 },
+        "deltas": { "distinctiveness": 33.0, "voice_match": null, "on_message": 31.0 },
+        "faithfulness": 100,
+        "unsupported_claims": [],
+        "summary": "Distinctiveness 71/100 · On-message 81/100",
+        "refined": false
       },
       {
         "persona": "Sensory-Led",
         "persona_description": "Grounds ideas in physical sensation, texture, and concrete scene.",
         "text": "Paste your draft into any AI assistant. Watch it come back smoother, rounder, emptier — like river stones that lost their edges in the current. That's what homogenisation feels like from the inside: not loss, but a quiet erasure of the grain.",
-        "generic_distance": 19.0
+        "scores": { "distinctiveness": 83.0, "voice_match": null, "on_message": 68.0 },
+        "deltas": { "distinctiveness": 45.0, "voice_match": null, "on_message": 18.0 },
+        "faithfulness": 100,
+        "unsupported_claims": [],
+        "summary": "Distinctiveness 83/100 · On-message 68/100",
+        "refined": false
       }
     ],
     "demo_mode": true
