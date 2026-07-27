@@ -12,9 +12,19 @@ class Settings(BaseSettings):
     watsonx_project_id: str
     watsonx_url: str = "https://eu-gb.ml.cloud.ibm.com"
 
-    # Models
-    # Generation: llama-3-3-70b is the best available in eu-gb region
+    # Models — HYBRID strategy:
+    #   Llama-3-3-70b  → creative persona rewrites (best instruction-following in eu-gb)
+    #   Granite        → the "generic baseline" anchor + optional Guardian safety pass
+    #   Granite-embed  → all distance measurement (voice, distinctiveness, on-message)
     generation_model_id: str = "meta-llama/llama-3-3-70b-instruct"
+    # Baseline generation uses a Granite instruct model so the "bland default" is a
+    # genuine watsonx Granite artifact. Falls back to the generation model if this
+    # id is unavailable in-region (see generation.generate_baseline).
+    baseline_model_id: str = "ibm/granite-3-3-8b-instruct"
+    # Granite Guardian — hallucination / safety review pass. Optional; skipped
+    # gracefully if not available in-region.
+    guardian_model_id: str = "ibm/granite-guardian-3-2-5b"
+    enable_guardian: bool = False
     # Embedding: IBM Granite multilingual embedding (eu-gb available)
     embedding_model_id: str = "ibm/granite-embedding-278m-multilingual"
 
