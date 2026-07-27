@@ -127,7 +127,7 @@ IBM Bob (IBM SkillsBuild / BeMyApp) was the build tool across the entire SDLC �
 | **Backend** | Authored all Python — FastAPI app, embedding service, generation service, scoring service, fingerprint service, all Pydantic models |
 | **Frontend** | Authored all TypeScript/React — API client, hooks, all components, two-phase score+directions UX flow |
 | **Debugging** | Diagnosed and fixed SDK cold-start latency (module-level client caching), PowerShell pipe deadlock in server startup, model availability mismatch between eu-gb region and expected model IDs |
-| **Testing** | Wrote all unit tests (scoring service, 9/9 deterministic vector tests), calibration probe script, full pipeline validation script |
+| **Testing** | Wrote all unit tests (scoring service, 8/8 deterministic vector tests), calibration probe script, full pipeline validation script |
 | **Calibration** | Ran live embedding probe against Granite API to derive real cosine distance floor/ceiling constants |
 | **Git** | Structured all commits with conventional commit messages, rewrote author identity across history |
 | **README** | This document |
@@ -200,7 +200,7 @@ stilliu/
 │   │       ├── generation.py   # Baseline + 3 persona directions
 │   │       ├── scoring.py      # Normalised distance → display score
 │   │       └── fingerprint.py  # Voice centroid builder
-│   ├── tests/               # Unit tests (9/9 passing)
+│   ├── tests/               # Unit tests (8/8 passing)
 │   ├── start.bat            # Start backend (live mode)
 │   ├── start_demo.bat       # Start backend (demo mode)
 │   └── requirements.txt
