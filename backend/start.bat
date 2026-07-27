@@ -1,7 +1,9 @@
 @echo off
 cd /d "%~dp0"
-set WATSONX_API_KEY=REDACTED_ROTATED_KEY
-set WATSONX_PROJECT_ID=REDACTED_PROJECT_ID
+REM ── LIVE MODE ────────────────────────────────────────────────────────────────
+REM Credentials are NOT set here. Put WATSONX_API_KEY and WATSONX_PROJECT_ID in
+REM backend\.env (gitignored) — config.py loads them automatically. Never hardcode
+REM secrets in this file; it is tracked in git.
 set WATSONX_URL=https://eu-gb.ml.cloud.ibm.com
 set EMBEDDING_MODEL_ID=ibm/granite-embedding-278m-multilingual
 set GENERATION_MODEL_ID=meta-llama/llama-3-3-70b-instruct

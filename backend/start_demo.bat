@@ -1,7 +1,10 @@
 @echo off
 cd /d "%~dp0"
-set WATSONX_API_KEY=REDACTED_ROTATED_KEY
-set WATSONX_PROJECT_ID=REDACTED_PROJECT_ID
+REM ── DEMO MODE ────────────────────────────────────────────────────────────────
+REM Serves pre-computed fixtures — no real API calls, no network. The placeholder
+REM credentials below only satisfy config validation; they are NOT real secrets.
+set WATSONX_API_KEY=demo-placeholder-not-a-real-key
+set WATSONX_PROJECT_ID=demo-placeholder-not-a-real-project
 set WATSONX_URL=https://eu-gb.ml.cloud.ibm.com
 set EMBEDDING_MODEL_ID=ibm/granite-embedding-278m-multilingual
 set GENERATION_MODEL_ID=meta-llama/llama-3-3-70b-instruct
