@@ -3,28 +3,69 @@
 
 const BASE = '' // Vite proxy routes /api and /health to localhost:8000
 
-export interface ScoreResult {
-  generic_distance: number
-  voice_distance: number | null
-  generic_raw: number
-  voice_raw: number | null
+// ── Writer controls ───────────────────────────────────────────────────────────
+export interface WriterControls {
+  preserve_facts: boolean
+  fmt: 'prose' | 'bullets' | 'punchy' | 'longform'
+  length: 'shorter' | 'match' | 'longer'
+  tone: string
+  audience: string
+  personas: string[] | null
+  custom_persona: string
+  voice_strength: number
+}
+
+export const DEFAULT_CONTROLS: WriterControls = {
+  preserve_facts: true,
+  fmt: 'prose',
+  length: 'match',
+  tone: '',
+  audience: '',
+  personas: null,
+  custom_persona: '',
+  voice_strength: 0.5,
+}
+
+// ── Multi-axis scores (HIGH = GOOD everywhere) ────────────────────────────────
+export interface AxisScores {
+  distinctiveness: number
+  voice_match: number | null
+  on_message: number
+}
+
+export interface AxisDeltas {
+  distinctiveness: number
+  voice_match: number | null
+  on_message: number
+}
+
+export interface DraftScores {
+  distinctiveness: number
+  voice_match: number | null
+  summary: string
 }
 
 export interface DirectionCard {
   persona: string
   persona_description: string
   text: string
-  generic_distance: number
+  scores: AxisScores
+  deltas: AxisDeltas
+  faithfulness: number
+  unsupported_claims: string[]
+  summary: string
+  refined: boolean
 }
 
 export interface AnalyzeResponse {
-  scores: ScoreResult
+  draft_scores: DraftScores
   directions: DirectionCard[]
+  baseline_preview: string
   demo_mode: boolean
 }
 
 export interface ScoreOnlyResponse {
-  scores: ScoreResult
+  draft_scores: DraftScores
   baseline_preview: string
   demo_mode: boolean
 }
@@ -34,6 +75,7 @@ export interface HealthResponse {
   demo_mode: boolean
   embed_model: string
   gen_model: string
+  baseline_model: string
 }
 
 export interface FingerprintResponse {
@@ -62,7 +104,6 @@ async function fetchWithTimeout(
     const res = await fetch(url, { ...options, signal: controller.signal })
     return res
   } catch (err) {
-    // Translate AbortError into a human-readable message
     if (err instanceof DOMException && err.name === 'AbortError') {
       throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s. The backend is still processing — please try again.`)
     }
@@ -95,7 +136,7 @@ export async function checkHealth(): Promise<HealthResponse> {
   return res.json() as Promise<HealthResponse>
 }
 
-/** Fast path — scores only. Backend timeout: 60s. Frontend allows 75s. */
+/** Fast path — draft scores only. Backend timeout: 60s. Frontend allows 75s. */
 export async function scoreDraft(
   draft: string,
   voiceSamples?: string[],
@@ -107,14 +148,15 @@ export async function scoreDraft(
   )
 }
 
-/** Full analysis — scores + three divergent directions. Backend timeout: 120s. Frontend allows 140s. */
+/** Full analysis — scores + divergent directions. Backend timeout: 120s. Frontend allows 140s. */
 export async function analyzeDraft(
   draft: string,
-  voiceSamples?: string[],
+  voiceSamples: string[] | undefined,
+  controls: WriterControls,
 ): Promise<AnalyzeResponse> {
   return post<AnalyzeResponse>(
     '/api/analyze',
-    { draft, voice_samples: voiceSamples ?? null },
+    { draft, voice_samples: voiceSamples ?? null, controls },
     TIMEOUTS.analyze,
   )
 }
