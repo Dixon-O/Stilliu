@@ -35,7 +35,7 @@ def post(path: str, data: dict) -> dict:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with urllib.request.urlopen(req, timeout=150) as resp:
         return json.loads(resp.read())
 
 
@@ -58,23 +58,23 @@ print(f"  status:      {h['status']}")
 print(f"  demo_mode:   {h['demo_mode']}")
 print(f"  embed_model: {h.get('embed_model', '—')}")
 print(f"  gen_model:   {h.get('gen_model', '—')}")
+print(f"  baseline:    {h.get('baseline_model', '—')}")
 assert h["status"] == "ok", "Health check failed"
 
 # ── Score only (fast path) ────────────────────────────────────────────────────
-section("2. /api/score  (fast path — scores only)")
+section("2. /api/score  (fast path — draft scores only)")
 print(f"  Draft: \"{TEST_DRAFT[:80]}...\"")
 print("  Calling /api/score (may take ~10–20s live)...")
 
 score_res = post("/api/score", {"draft": TEST_DRAFT})
-scores = score_res["scores"]
-print(f"\n  generic_distance:  {scores['generic_distance']} / 100")
-print(f"  generic_raw:       {scores['generic_raw']}")
-print(f"  voice_distance:    {scores['voice_distance']} (None — no samples sent)")
-print(f"  baseline_preview:  \"{score_res.get('baseline_preview', '')[:80]}\"")
-print(f"  demo_mode:         {score_res['demo_mode']}")
+ds = score_res["draft_scores"]
+print(f"\n  distinctiveness:  {ds['distinctiveness']} / 100")
+print(f"  voice_match:      {ds['voice_match']} (None — no samples sent)")
+print(f"  baseline_preview: \"{score_res.get('baseline_preview', '')[:80]}\"")
+print(f"  demo_mode:        {score_res['demo_mode']}")
 
-assert 0 <= scores["generic_distance"] <= 100, "Generic score out of range"
-assert scores["voice_distance"] is None, "Expected no voice score without samples"
+assert 0 <= ds["distinctiveness"] <= 100, "Distinctiveness out of range"
+assert ds["voice_match"] is None, "Expected no voice score without samples"
 
 # ── Score with voice samples ──────────────────────────────────────────────────
 section("3. /api/score  (with voice fingerprint)")
@@ -83,24 +83,34 @@ score_voice_res = post("/api/score", {
     "draft": TEST_DRAFT,
     "voice_samples": TEST_VOICE_SAMPLES,
 })
-sv = score_voice_res["scores"]
-print(f"\n  generic_distance:  {sv['generic_distance']} / 100")
-print(f"  voice_distance:    {sv['voice_distance']} / 100  ← unlocked")
-print(f"  voice_raw:         {sv['voice_raw']}")
+sv = score_voice_res["draft_scores"]
+print(f"\n  distinctiveness:  {sv['distinctiveness']} / 100")
+print(f"  voice_match:      {sv['voice_match']} / 100  ← unlocked")
 
-assert sv["voice_distance"] is not None, "Expected voice score with samples"
-assert 0 <= sv["voice_distance"] <= 100, "Voice score out of range"
+assert sv["voice_match"] is not None, "Expected voice score with samples"
+assert 0 <= sv["voice_match"] <= 100, "Voice score out of range"
 
 # ── Full analyze ──────────────────────────────────────────────────────────────
-section("4. /api/analyze  (full — scores + directions)")
+section("4. /api/analyze  (full — scores + directions + refine)")
 print("  Calling /api/analyze (may take ~30–60s live)...")
-full_res = post("/api/analyze", {"draft": TEST_DRAFT})
-print(f"\n  generic_distance:  {full_res['scores']['generic_distance']} / 100")
-print(f"  Directions returned: {len(full_res['directions'])}")
+full_res = post("/api/analyze", {
+    "draft": TEST_DRAFT,
+    "voice_samples": TEST_VOICE_SAMPLES,
+    "controls": {"preserve_facts": True, "voice_strength": 0.6},
+})
+fds = full_res["draft_scores"]
+print(f"\n  draft distinctiveness: {fds['distinctiveness']} / 100")
+print(f"  baseline_preview:      \"{full_res.get('baseline_preview', '')[:80]}\"")
+print(f"  Directions returned:   {len(full_res['directions'])}")
 for card in full_res["directions"]:
-    print(f"\n  [{card['persona']}]  score={card['generic_distance']}/100")
-    print(f"  {card['text'][:120]}...")
+    s, d = card["scores"], card["deltas"]
+    print(f"\n  [{card['persona']}]{'  (refined)' if card['refined'] else ''}")
+    print(f"    distinctiveness={s['distinctiveness']}/100 (Δ{d['distinctiveness']:+})  "
+          f"voice={s['voice_match']}  on_message={s['on_message']}/100  faith={card['faithfulness']}/100")
+    print(f"    {card['text'][:120]}...")
+    assert 0 <= s["distinctiveness"] <= 100, "Direction distinctiveness out of range"
+    assert 0 <= card["faithfulness"] <= 100, "Faithfulness out of range"
 
-assert len(full_res["directions"]) == 3, "Expected 3 direction cards"
+assert len(full_res["directions"]) >= 1, "Expected at least one direction card"
 
 section("ALL INTEGRATION TESTS PASSED")

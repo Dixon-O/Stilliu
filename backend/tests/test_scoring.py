@@ -1,82 +1,108 @@
 """
-tests/test_scoring.py — Unit tests for the scoring service.
+tests/test_scoring.py — Unit tests for the multi-axis scoring service.
 
-These are deterministic: we pass known vectors with known cosine distances
-and assert the display scores land where the calibration model predicts.
+Deterministic: known vectors with known cosine distances, asserting the
+0–100 display scores land where the calibration model predicts. HIGH = GOOD
+on every axis.
 """
 import numpy as np
 import pytest
-from app.services.scoring import compute_generic_score, compute_voice_score, score_summary
+from app.services.scoring import (
+    compute_distinctiveness, compute_voice_match, compute_on_message,
+    score_axes, score_summary,
+)
+
+MINIMAL = "She left. He stayed. Rain fell."
+VERBOSE = (
+    "The extraordinarily complex situation unfolded with remarkable deliberateness; "
+    "each participant contributed to the inexorable momentum of events."
+)
 
 
-def _vec(values: list[float]) -> np.ndarray:
+def _vec(values):
     return np.array(values, dtype=np.float32)
 
 
-class TestComputeGenericScore:
-    def test_identical_vectors_give_low_generic_score(self):
-        """
-        Zero cosine distance → draft IS the baseline → maximally generic.
-        With invert=True: raw=0 (below FLOOR=0.05) → clamped → display=100.
-        (High generic score means sounds like everyone.)
-        """
+class TestDistinctiveness:
+    def test_identical_to_baseline_is_low(self):
+        """Draft == bland baseline → not distinctive → low score."""
         v = _vec([1.0, 0.0, 0.0])
-        display, raw = compute_generic_score(v, v)
-        assert raw == pytest.approx(0.0, abs=1e-5)
-        # raw below FLOOR, invert=True → clamped to 100 (most generic)
-        assert display == 100.0
+        score, raw_sem, raw_sty = compute_distinctiveness(v, v, MINIMAL, MINIMAL)
+        assert raw_sem == pytest.approx(0.0, abs=1e-5)
+        assert raw_sty == pytest.approx(0.0, abs=1e-5)
+        assert score < 20  # near-zero semantic AND style distance
 
-    def test_orthogonal_vectors_give_high_distinctiveness(self):
-        """
-        Cosine distance of 1.0 → draft is maximally unlike baseline → highly distinctive.
-        With invert=True: raw=1.0 (above CEIL=0.55) → clamped → display=0.
-        (Low generic score means distinctive.)
-        """
-        a = _vec([1.0, 0.0])
-        b = _vec([0.0, 1.0])
-        display, raw = compute_generic_score(a, b)
-        assert raw == pytest.approx(1.0, abs=1e-5)
-        # raw above CEIL, invert=True → clamped to 0 (most distinctive)
-        assert display == 0.0
+    def test_orthogonal_and_stylistically_far_is_high(self):
+        a, b = _vec([1.0, 0.0]), _vec([0.0, 1.0])
+        score, raw_sem, _ = compute_distinctiveness(a, b, MINIMAL, VERBOSE)
+        assert raw_sem == pytest.approx(1.0, abs=1e-5)
+        assert score > 60  # far on both axes
 
-    def test_moderate_distance_is_in_range(self):
-        """A moderate cosine distance should land between 0 and 100."""
-        a = _vec([1.0, 0.5, 0.0])
-        b = _vec([0.8, 0.5, 0.3])
-        display, raw = compute_generic_score(a, b)
-        assert 0.0 <= display <= 100.0
-        assert 0.0 <= raw <= 1.0
-
-    def test_zero_vector_handled(self):
-        """A zero vector should not raise — returns distance of 1.0."""
-        a = _vec([0.0, 0.0, 0.0])
-        b = _vec([1.0, 0.0, 0.0])
-        display, raw = compute_generic_score(a, b)
-        assert raw == pytest.approx(1.0, abs=1e-5)
+    def test_in_range(self):
+        a, b = _vec([1.0, 0.5, 0.0]), _vec([0.8, 0.5, 0.3])
+        score, _, _ = compute_distinctiveness(a, b, MINIMAL, VERBOSE)
+        assert 0.0 <= score <= 100.0
 
 
-class TestComputeVoiceScore:
-    def test_same_vector_returns_low_voice_distance(self):
-        """Draft identical to voice centroid → sounds exactly like the writer → ~0."""
+class TestVoiceMatch:
+    def test_identical_voice_is_high(self):
+        """Text == voice centroid and same style → high voice match."""
         v = _vec([0.5, 0.5, 0.5])
-        display, raw = compute_voice_score(v, v)
-        assert raw == pytest.approx(0.0, abs=1e-5)
-        assert display == 0.0
+        score, raw_sem, _ = compute_voice_match(v, v, MINIMAL, [MINIMAL])
+        assert raw_sem == pytest.approx(0.0, abs=1e-5)
+        assert score > 80
 
-    def test_opposite_vector_returns_high_voice_distance(self):
-        a = _vec([1.0, 0.0])
-        b = _vec([0.0, 1.0])
-        display, raw = compute_voice_score(a, b)
-        assert display == 100.0
+    def test_opposite_voice_is_low(self):
+        a, b = _vec([1.0, 0.0]), _vec([0.0, 1.0])
+        score, _, _ = compute_voice_match(a, b, MINIMAL, [VERBOSE])
+        assert score < 50
+
+
+class TestOnMessage:
+    def test_identical_is_100(self):
+        v = _vec([1.0, 0.0, 0.0])
+        score, raw = compute_on_message(v, v)
+        assert raw == pytest.approx(0.0, abs=1e-5)
+        assert score == 100.0
+
+    def test_orthogonal_is_0(self):
+        a, b = _vec([1.0, 0.0]), _vec([0.0, 1.0])
+        score, _ = compute_on_message(a, b)
+        assert score == 0.0
+
+
+class TestScoreAxes:
+    def test_returns_all_keys_and_deltas(self):
+        rng = np.random.default_rng(1)
+        dv, bv, vc, dirv = (rng.standard_normal(64).astype(np.float32) for _ in range(4))
+        axes = score_axes(
+            draft_vector=dv, draft_str=MINIMAL,
+            baseline_vector=bv, baseline_str=VERBOSE,
+            voice_centroid=vc, voice_samples=[VERBOSE],
+            direction_vector=dirv, direction_str=VERBOSE,
+        )
+        for key in ("distinctiveness", "voice_match", "on_message",
+                    "delta_distinctiveness", "delta_voice_match", "delta_on_message"):
+            assert key in axes
+        for axis in ("distinctiveness", "voice_match", "on_message"):
+            assert 0.0 <= axes[axis] <= 100.0
+
+    def test_delta_is_direction_minus_draft(self):
+        v = _vec([1.0, 0.0, 0.0])
+        bv = _vec([0.0, 1.0, 0.0])
+        axes = score_axes(
+            draft_vector=v, draft_str=MINIMAL,
+            baseline_vector=bv, baseline_str=VERBOSE,
+            voice_centroid=v, voice_samples=[MINIMAL],
+            direction_vector=v, direction_str=MINIMAL,
+        )
+        # direction == draft → distinctiveness delta should be ~0
+        assert axes["delta_distinctiveness"] == pytest.approx(0.0, abs=0.1)
 
 
 class TestScoreSummary:
-    def test_returns_string(self):
-        result = score_summary(65.0, 42.0)
-        assert isinstance(result, str)
-        assert "65" in result
-        assert "42" in result
-
-    def test_no_voice_samples(self):
-        result = score_summary(40.0, None)
-        assert "Voice" not in result
+    def test_contains_all_axes(self):
+        axes = {"distinctiveness": 72.0, "voice_match": 60.0, "on_message": 80.0}
+        result = score_summary(axes)
+        assert "Distinctiveness" in result and "Voice" in result and "On-message" in result
+        assert "72" in result

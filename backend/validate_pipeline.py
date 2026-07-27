@@ -1,6 +1,9 @@
 """
-validate_pipeline.py — Full end-to-end pipeline validation.
+validate_pipeline.py — Full end-to-end pipeline validation (live watsonx calls).
 Run: python validate_pipeline.py  (from stilliu/backend with venv active)
+
+Requires real credentials in .env. For offline validation of the deterministic
+math with no credentials, run selfcheck.py instead.
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(__file__))
@@ -8,10 +11,15 @@ sys.path.insert(0, os.path.dirname(__file__))
 from app.config import get_settings
 get_settings.cache_clear()
 
+from app.models import WriterControls
 from app.services.embeddings import get_embedding_client, mean_embedding, split_into_paragraphs
-from app.services.generation import get_generation_client, generate_baseline, generate_divergent_directions
-from app.services.fingerprint import build_voice_centroid, extract_style_signals
-from app.services.scoring import compute_generic_score, compute_voice_score
+from app.services.generation import (
+    get_generation_client, get_baseline_client,
+    generate_baseline, generate_divergent_directions,
+)
+from app.services.fingerprint import build_voice_centroid
+from app.services.scoring import compute_distinctiveness, compute_voice_match, score_axes
+from app.services.guardrails import check_faithfulness
 
 DRAFT = (
     "Nobody warned me the hardest part of starting a company is the silence. "
@@ -35,6 +43,7 @@ print("\n[1] Warming SDK clients...")
 t0 = time.time()
 get_embedding_client()
 get_generation_client()
+get_baseline_client()
 print(f"    Warm-up: {time.time()-t0:.1f}s")
 
 print("\n[2] Scoring draft...")
@@ -43,35 +52,44 @@ draft_paras = split_into_paragraphs(DRAFT)
 draft_vec = mean_embedding(draft_paras)
 baseline_text = generate_baseline(DRAFT)
 baseline_vec = mean_embedding(split_into_paragraphs(baseline_text))
-generic_display, generic_raw = compute_generic_score(draft_vec, baseline_vec)
+draft_dist, dist_sem, dist_sty = compute_distinctiveness(draft_vec, baseline_vec, DRAFT, baseline_text)
 print(f"    Time: {time.time()-t0:.1f}s")
-print(f"    generic_distance : {generic_display}/100  (raw: {generic_raw:.4f})")
-print(f"    Baseline preview : {baseline_text[:120]}")
+print(f"    draft distinctiveness : {draft_dist}/100  (sem={dist_sem:.4f}  style={dist_sty:.4f})")
+print(f"    Baseline preview      : {baseline_text[:120]}")
 
 print("\n[3] Voice fingerprint...")
 centroid = build_voice_centroid(VOICE_SAMPLES)
-voice_display, voice_raw = compute_voice_score(draft_vec, centroid)
-signals = extract_style_signals(VOICE_SAMPLES)
-print(f"    voice_distance   : {voice_display}/100  (raw: {voice_raw:.4f})")
-print(f"    Style signals    : avg_sent={signals['avg_sentence_length']}  richness={signals['vocabulary_richness']}")
+draft_voice, voice_sem, voice_sty = compute_voice_match(draft_vec, centroid, DRAFT, VOICE_SAMPLES)
+print(f"    draft voice match     : {draft_voice}/100  (sem={voice_sem:.4f}  style={voice_sty:.4f})")
 
-print("\n[4] Generating 3 divergent directions (parallel)...")
+print("\n[4] Generating divergent directions (parallel)...")
 t0 = time.time()
-directions = generate_divergent_directions(DRAFT, style_signals=signals)
+controls = WriterControls(voice_strength=0.6)
+directions = generate_divergent_directions(DRAFT, VOICE_SAMPLES, controls)
 print(f"    Generation time  : {time.time()-t0:.1f}s")
 
-all_scores_lower = True
+more_distinct = 0
+source_pool = [DRAFT] + VOICE_SAMPLES
 for d in directions:
     dir_vec = mean_embedding(split_into_paragraphs(d["text"]))
-    dir_score, _ = compute_generic_score(dir_vec, baseline_vec)
-    is_lower = dir_score < generic_display
-    if not is_lower:
-        all_scores_lower = False
-    print(f"\n    [{d['name']}]  generic_score={dir_score}/100  {'LOWER' if is_lower else 'NOT lower'}")
+    axes = score_axes(
+        draft_vector=draft_vec, draft_str=DRAFT,
+        baseline_vector=baseline_vec, baseline_str=baseline_text,
+        voice_centroid=centroid, voice_samples=VOICE_SAMPLES,
+        direction_vector=dir_vec, direction_str=d["text"],
+    )
+    faith, unsupported = check_faithfulness(d["text"], source_pool)
+    if axes["distinctiveness"] > draft_dist:
+        more_distinct += 1
+    print(f"\n    [{d['name']}]")
+    print(f"    distinctiveness={axes['distinctiveness']}/100 (Δ{axes['delta_distinctiveness']:+})  "
+          f"voice={axes['voice_match']}/100  on_message={axes['on_message']}/100  faith={faith}/100")
+    if unsupported:
+        print(f"    unsupported claims: {unsupported}")
     print(f"    {d['text'][:240]}")
 
 print("\n" + "=" * 60)
-print(f"Score check (directions < original): {'PASS' if all_scores_lower else 'NOTE: some directions scored >= original'}")
-print(f"Original generic_distance: {generic_display}/100")
+print(f"Directions more distinctive than draft: {more_distinct}/{len(directions)}")
+print(f"Draft distinctiveness: {draft_dist}/100")
 print("PIPELINE VALIDATION COMPLETE")
 print("=" * 60)
