@@ -47,7 +47,7 @@ export default function VoiceOnboarding({ fingerprint, onAddSamples, onClear, lo
         <span style={toggleDotStyle(fingerprint.isActive)} />
         {fingerprint.isActive
           ? `Voice fingerprint active — ${fingerprint.sampleCount} samples · ${fingerprint.paragraphCount} paragraphs`
-          : 'Add your writing samples → unlock voice distance score'}
+          : 'Add your writing samples → unlock the voice-match score'}
         <span style={styles.chevron}>{open ? '▲' : '▼'}</span>
       </button>
 
@@ -57,8 +57,9 @@ export default function VoiceOnboarding({ fingerprint, onAddSamples, onClear, lo
             <div style={styles.activeState}>
               <p style={styles.activeMsg}>{fingerprint.message}</p>
               <p style={styles.activeSub}>
-                Your voice fingerprint is built from paragraph-level embeddings averaged into a centroid.
-                The Voice Distance score compares your draft's embedding against this centroid.
+                Your voice fingerprint is built from paragraph-level embeddings averaged into a centroid,
+                combined with a stylometric profile of your sentence rhythm and word habits.
+                The Voice-match score compares each direction against both — 100 means it sounds like you.
               </p>
               <button style={styles.clearBtn} onClick={onClear} type="button">
                 Clear fingerprint

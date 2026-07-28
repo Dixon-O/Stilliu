@@ -4,6 +4,8 @@
 const BASE = '' // Vite proxy routes /api and /health to localhost:8000
 
 // ── Writer controls ───────────────────────────────────────────────────────────
+export type Divergence = 'nudge' | 'recast' | 'break'
+
 export interface WriterControls {
   preserve_facts: boolean
   fmt: 'prose' | 'bullets' | 'punchy' | 'longform'
@@ -12,6 +14,8 @@ export interface WriterControls {
   audience: string
   personas: string[] | null
   custom_persona: string
+  divergence: Divergence
+  avoid_ai_cadence: boolean
   voice_strength: number
 }
 
@@ -23,7 +27,41 @@ export const DEFAULT_CONTROLS: WriterControls = {
   audience: '',
   personas: null,
   custom_persona: '',
+  divergence: 'recast',
+  avoid_ai_cadence: false,
   voice_strength: 0.5,
+}
+
+/** Named notches beat a bare slider — each one states what it will do. */
+export const DIVERGENCE_NOTCHES: {
+  value: Divergence
+  label: string
+  hint: string
+}[] = [
+  { value: 'nudge',  label: 'Nudge',  hint: 'Same structure, sharpened. Word choice and rhythm only.' },
+  { value: 'recast', label: 'Recast', hint: 'Re-formed freely in the style, every point kept.' },
+  { value: 'break',  label: 'Break',  hint: 'Original shape discarded and rebuilt. Highest risk, highest gain.' },
+]
+
+// ── Style preset library (served from backend/app/services/styles.py) ─────────
+export interface StyleGroup {
+  id: string
+  label: string
+  blurb: string
+}
+
+export interface StylePreset {
+  name: string
+  group: string
+  group_label: string
+  description: string
+}
+
+export interface StyleLibrary {
+  groups: StyleGroup[]
+  styles: StylePreset[]
+  defaults: string[]
+  max_selected: number
 }
 
 // ── Multi-axis scores (HIGH = GOOD everywhere) ────────────────────────────────
@@ -163,4 +201,14 @@ export async function analyzeDraft(
 
 export async function validateFingerprint(samples: string[]): Promise<FingerprintResponse> {
   return post<FingerprintResponse>('/api/fingerprint/validate', { samples }, TIMEOUTS.health)
+}
+
+/**
+ * Fetch the style preset library. The list lives in styles.py on the backend so
+ * adding a preset there makes it appear in the picker with no frontend change.
+ */
+export async function fetchStyles(): Promise<StyleLibrary> {
+  const res = await fetchWithTimeout(`${BASE}/api/styles`, { method: 'GET' }, TIMEOUTS.health)
+  if (!res.ok) throw new Error(`Could not load style library: ${res.status}`)
+  return res.json() as Promise<StyleLibrary>
 }
