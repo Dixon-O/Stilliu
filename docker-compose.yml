@@ -1,0 +1,51 @@
+# ── Stilliu — one-command local run ───────────────────────────────────────────
+#
+#   docker compose up --build
+#   → frontend on http://localhost:5173
+#   → backend  on http://localhost:8000  (docs at /docs)
+#
+# Credentials: copy backend/.env.example to backend/.env and fill it in.
+# With no .env present the backend starts in DEMO_MODE and serves fixtures,
+# so the UI is still fully clickable — useful for a judge with no IBM account.
+
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: stilliu-backend
+    ports:
+      - "8000:8000"
+    # `required: false` means the stack still comes up (in demo mode) when the
+    # file is absent. Compose v2.24+ — on older Compose, create an empty
+    # backend/.env instead and drop this flag.
+    env_file:
+      - path: ./backend/.env
+        required: false
+    volumes:
+      # Live reload against your working tree.
+      - ./backend:/app
+      # Anonymous volume keeps container-side __pycache__ out of the bind mount.
+      - /app/__pycache__
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: stilliu-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      # Proxy to the backend *service name*, not localhost — inside the frontend
+      # container, localhost is the frontend itself.
+      VITE_API_TARGET: http://backend:8000
+      # inotify doesn't cross the bind mount on Windows/macOS; poll instead.
+      VITE_USE_POLLING: "true"
+    volumes:
+      - ./frontend:/app
+      # Anonymous volume: keep the image's node_modules (built for Linux) rather
+      # than letting a host node_modules shadow it. This is the single most
+      # common cause of "works natively, breaks in Docker" on this stack.
+      - /app/node_modules
+    depends_on:
+      backend:
+        condition: service_healthy

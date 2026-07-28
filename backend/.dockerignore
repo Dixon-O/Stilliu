@@ -1,0 +1,23 @@
+# Never bake credentials into an image layer. The real .env is injected at
+# runtime by docker-compose via `env_file:` — an image layer would persist the
+# secret even after the file changed, and would ship it to anyone you push to.
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+
+# Windows helper scripts — irrelevant inside a Linux container.
+*.bat
+
+.git/
+.gitignore
+.DS_Store

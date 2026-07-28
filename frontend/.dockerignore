@@ -1,0 +1,18 @@
+# node_modules must be built inside the image for the container's platform.
+# Copying a host (Windows/macOS) node_modules in is the classic cause of
+# "esbuild/rollup has the wrong binary" failures.
+node_modules/
+dist/
+.vite/
+
+npm-debug.log*
+yarn-error.log*
+
+# Windows helper scripts — irrelevant inside a Linux container.
+*.bat
+
+.git/
+.gitignore
+.env
+.env.*
+.DS_Store
