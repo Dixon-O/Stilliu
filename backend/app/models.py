@@ -45,11 +45,25 @@ class WriterControls(BaseModel):
     )
     personas: Optional[list[str]] = Field(
         default=None,
-        description="Which persona names to generate, in order. None = default three.",
+        description="Which style preset names to generate, in order. None = the "
+                    "three defaults. Names must match app.services.styles.STYLES; "
+                    "unknown names are ignored. Capped at MAX_SELECTED_STYLES.",
     )
     custom_persona: str = Field(
         default="",
-        description="Free-text custom persona instruction. Added as an extra direction.",
+        description="Free-text custom style brief. Added as an extra direction.",
+    )
+    divergence: str = Field(
+        default="recast",
+        description="How far a rewrite may travel from the draft: 'nudge' (word "
+                    "choice and rhythm only), 'recast' (re-form freely, keep every "
+                    "point), or 'break' (discard the original structure entirely).",
+    )
+    avoid_ai_cadence: bool = Field(
+        default=False,
+        description="Apply a global ban on the measured markers of AI-generated "
+                    "prose (tricolons, 'not just X but Y', em-dash asides, "
+                    "summarising closers, and the known over-represented lexicon).",
     )
     voice_strength: float = Field(
         default=0.5,

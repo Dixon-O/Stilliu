@@ -31,6 +31,7 @@ from app.services.scoring import (
     compute_distinctiveness, compute_voice_match, score_axes, score_summary,
 )
 from app.services.guardrails import check_faithfulness
+from app.services.styles import styles_payload
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 logger = logging.getLogger(__name__)
@@ -161,6 +162,16 @@ async def health():
         gen_model=settings.generation_model_id,
         baseline_model=settings.baseline_model_id,
     )
+
+
+@app.get("/api/styles")
+async def list_styles():
+    """
+    The style preset library, grouped. The frontend renders its picker straight
+    from this so the list never has to be duplicated client-side — adding a
+    preset in styles.py is enough to make it appear in the UI.
+    """
+    return styles_payload()
 
 
 @app.post("/api/score", response_model=ScoreOnlyResponse)

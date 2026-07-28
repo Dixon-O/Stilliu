@@ -10,6 +10,7 @@ SDK clients are cached at module level — same pattern as embeddings.py.
 """
 from __future__ import annotations
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ibm_watsonx_ai import APIClient, Credentials
@@ -77,62 +78,53 @@ def get_baseline_client() -> ModelInference:
             _baseline_client = get_generation_client()
     return _baseline_client
 
-# ── Personas ─────────────────────────────────────────────────────────────────
+# ── Styles ────────────────────────────────────────────────────────────────────
+# The preset library lives in styles.py so the API and the UI share one source
+# of truth. PERSONAS/PERSONAS_BY_NAME are re-exported for backwards compatibility.
 
-PERSONAS = [
-    {
-        "name": "Sparse Minimalist",
-        "description": "Short sentences. Nothing decorative. Meaning carried by what is left out.",
-        "instruction": (
-            "Rewrite the text below. Style: Sparse Minimalist. "
-            "Rules: short declarative sentences only, no adjectives unless they change meaning, "
-            "no filler phrases, no metaphors, no rhetorical questions."
-        ),
-    },
-    {
-        "name": "The Arguer",
-        "description": "Leads with a bold claim. Builds a case. Anticipates pushback and answers it.",
-        "instruction": (
-            "Rewrite the text below. Style: The Arguer. "
-            "Rules: open with a bold, direct claim; build the argument step by step; "
-            "address the strongest objection and refute it; no hedging words "
-            "('perhaps', 'might', 'some people think'); do not start with a question."
-        ),
-    },
-    {
-        "name": "Sensory-Led",
-        "description": "Grounds ideas in physical sensation, texture, and concrete scene.",
-        "instruction": (
-            "Rewrite the text below. Style: Sensory-Led. "
-            "Rules: open with a concrete sensory detail (seen, heard, felt, smelled); "
-            "ground every abstract idea in a physical object or moment; "
-            "do not use the words 'important', 'significant', or 'interesting'; "
-            "do not start with an abstract claim or statistic."
-        ),
-    },
-]
+from app.services.styles import (  # noqa: E402
+    STYLES,
+    STYLES_BY_NAME,
+    DEFAULT_STYLE_NAMES,
+    MAX_SELECTED_STYLES,
+    build_instruction,
+)
 
-PERSONAS_BY_NAME = {p["name"]: p for p in PERSONAS}
+PERSONAS = STYLES
+PERSONAS_BY_NAME = STYLES_BY_NAME
 
 
 def _resolve_personas(controls) -> list[dict]:
-    """Select which personas to run based on writer controls."""
+    """
+    Select which styles to run, in the order the writer picked them.
+
+    Unknown names are ignored rather than raising — the UI and the library can
+    drift across a deploy, and a stale chip shouldn't fail the whole request.
+    """
     chosen: list[dict] = []
+    seen: set[str] = set()
     names = getattr(controls, "personas", None)
     if names:
         for n in names:
-            if n in PERSONAS_BY_NAME:
-                chosen.append(PERSONAS_BY_NAME[n])
+            if n in STYLES_BY_NAME and n not in seen:
+                chosen.append(STYLES_BY_NAME[n])
+                seen.add(n)
     if not chosen:
-        chosen = list(PERSONAS)
+        chosen = [STYLES_BY_NAME[n] for n in DEFAULT_STYLE_NAMES if n in STYLES_BY_NAME]
+
     custom = getattr(controls, "custom_persona", "") or ""
     if custom.strip():
+        brief = custom.strip()
         chosen.append({
             "name": "Your Custom Direction",
-            "description": custom.strip()[:80],
-            "instruction": f"Rewrite the text below following this style brief: {custom.strip()}",
+            "group": "custom",
+            "description": brief[:80],
+            "instruction": f"Style brief from the writer, follow it precisely: {brief}",
+            "avoid": "",
         })
-    return chosen
+
+    # Each direction is a parallel LLM call — bound latency and spend.
+    return chosen[:MAX_SELECTED_STYLES]
 
 
 # ── Prompt construction ───────────────────────────────────────────────────────
@@ -149,6 +141,38 @@ _LENGTH_CLAUSE = {
     "longer":  "Expand it somewhat beyond the draft's length.",
 }
 
+# How far the rewrite is licensed to travel from the draft. Three named notches
+# beat a bare 0–100 slider: each notch has a stated meaning, so the writer can
+# predict the score delta before they click.
+_DIVERGENCE_CLAUSE = {
+    "nudge": (
+        "Stay close to the draft's structure and sentence order. Apply the style "
+        "through word choice and rhythm only. The reader should recognise this as "
+        "the same piece, sharpened."
+    ),
+    "recast": (
+        "Re-form the piece in this style. You may reorder, merge, and split "
+        "sentences freely, but keep every point the draft makes."
+    ),
+    "break": (
+        "Break the draft's shape completely and rebuild it in this style from the "
+        "ground up. Keep the argument and the facts; discard the original "
+        "structure, sentence order, and phrasing entirely. Take real risks."
+    ),
+}
+
+# Grounded in measured frequency spikes in LLM-authored text and in the
+# structural tells writers actually report. Applied as a global ban when the
+# writer enables it, on top of any per-style ban list.
+_AI_CADENCE_BAN = (
+    "Avoid the standard markers of AI-generated prose: three-item lists and "
+    "tricolons, the 'not just X but Y' construction, em-dash asides, a "
+    "summarising final sentence, opening with 'In today's world', and the words "
+    "'delve', 'leverage', 'tapestry', 'realm', 'testament', 'landscape', "
+    "'navigate', 'underscore', 'crucial', 'multifaceted', 'commendable', "
+    "'meticulous', 'intricate'."
+)
+
 
 def _controls_clause(controls) -> str:
     """Turn writer controls into an explicit instruction clause."""
@@ -161,12 +185,17 @@ def _controls_clause(controls) -> str:
     length = getattr(controls, "length", "match")
     if length in _LENGTH_CLAUSE and length != "match":
         bits.append(_LENGTH_CLAUSE[length])
+    divergence = getattr(controls, "divergence", "recast")
+    if divergence in _DIVERGENCE_CLAUSE:
+        bits.append(_DIVERGENCE_CLAUSE[divergence])
     tone = (getattr(controls, "tone", "") or "").strip()
     if tone:
         bits.append(f"Tone: {tone}.")
     audience = (getattr(controls, "audience", "") or "").strip()
     if audience:
         bits.append(f"Write for this audience: {audience}.")
+    if getattr(controls, "avoid_ai_cadence", False):
+        bits.append(_AI_CADENCE_BAN)
     if getattr(controls, "preserve_facts", True):
         bits.append(
             "Do NOT invent facts, names, statistics, quotes, publications, or places. "
@@ -237,11 +266,51 @@ def generate_baseline(draft: str) -> str:
 # ── Directions (Llama) ────────────────────────────────────────────────────────
 
 def _clean_output(text: str, persona_name: str) -> str:
+    """
+    Strip model scaffolding and stray Markdown from a generated direction.
+
+    Markdown removal matters twice over. It stops raw ``**bold**`` from showing
+    up in the rendered card, and — less obviously — it stops the markup from
+    corrupting the measurement: ``*``, ``#`` and ``_`` all count toward the
+    punctuation-density stylometry feature, which was inflating distinctiveness
+    for whichever direction happened to emit the most formatting.
+    """
     text = text.strip()
-    for prefix in [f"{persona_name}:", "Direction:", "Rewrite:", "Output:", "Rewritten text:"]:
+
+    # Leading labels the model sometimes prepends despite being told not to.
+    for prefix in (
+        f"{persona_name}:", "Direction:", "Rewrite:", "Output:",
+        "Rewritten text:", "Here is the rewritten text:", "Sure!", "Certainly!",
+    ):
         if text.lower().startswith(prefix.lower()):
             text = text[len(prefix):].strip()
-    return text
+
+    # Fenced code blocks — keep the contents, drop the fence.
+    text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+    text = re.sub(r"\n?```$", "", text)
+
+    # Inline emphasis: **bold**, __bold__, *italic*, _italic_.
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"__(.+?)__", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])", r"\1", text, flags=re.DOTALL)
+
+    # ATX headings — the model occasionally sections its output.
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+
+    # Normalise list bullets to a single character so the "bullets" format
+    # control still works, without leaving Markdown asterisks behind.
+    text = re.sub(r"^\s*[\*\-\+]\s+", "• ", text, flags=re.MULTILINE)
+
+    # Trailing meta-commentary the model adds after the rewrite.
+    text = re.sub(
+        r"\n+\s*(Note|Notes|Explanation|Word count|Let me know)\b.*$",
+        "",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    return text.strip()
 
 
 def generate_single_direction(
@@ -253,11 +322,12 @@ def generate_single_direction(
     """Generate one persona direction. Called in parallel via ThreadPoolExecutor."""
     model = get_generation_client()
     prompt = (
-        f"{persona['instruction']}{_controls_clause(controls)}"
+        f"{build_instruction(persona)}{_controls_clause(controls)}"
         f"{_voice_anchor(voice_samples, controls)}\n\n"
         f"Draft to transform:\n{draft}\n\n"
-        f"Write the rewritten text immediately. Do not add notes, labels, preamble, "
-        f"or commentary of any kind. Stop after the rewrite."
+        f"Write the rewritten text immediately. Plain prose only — no Markdown, "
+        f"no asterisks, no headings. Do not add notes, labels, preamble, or "
+        f"commentary of any kind. Stop after the rewrite."
     )
     try:
         text = _clean_output(model.generate_text(prompt=prompt), persona["name"])
@@ -319,16 +389,18 @@ def regenerate_direction(
     persona = PERSONAS_BY_NAME.get(persona_name, {
         "name": persona_name,
         "description": persona_description,
-        "instruction": f"Rewrite the text below in the style: {persona_description}",
+        "instruction": f"Style brief: {persona_description}",
+        "avoid": "",
     })
     model = get_generation_client()
     prompt = (
-        f"{persona['instruction']}{_controls_clause(controls)}"
+        f"{build_instruction(persona)}{_controls_clause(controls)}"
         f"{_voice_anchor(voice_samples, controls)}\n\n"
         f"Previous attempt fell short: {feedback}\n"
-        f"Fix exactly that while keeping the persona.\n\n"
+        f"Fix exactly that while keeping the style.\n\n"
         f"Draft to transform:\n{draft}\n\n"
-        f"Write only the rewritten text. No notes, labels, or commentary."
+        f"Write only the rewritten text. Plain prose, no Markdown. "
+        f"No notes, labels, or commentary."
     )
     try:
         text = _clean_output(model.generate_text(prompt=prompt), persona_name)
