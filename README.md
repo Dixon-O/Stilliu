@@ -135,57 +135,140 @@ Stilliu directly addresses all four challenge questions:
 
 ## Running Locally
 
-### Prerequisites
-- Python 3.10+
-- Node 18+
-- IBM Cloud account with watsonx.ai access (eu-gb region)
+Two supported paths. **Docker** is one command and works identically on every OS — use it if you just want the demo running. **Native** is better if you're developing, since you get your own debugger and a faster edit loop.
 
-### Backend
+### Credentials (both paths)
 
-```powershell
-cd backend
+Copy `backend/.env.example` to `backend/.env` and fill in your watsonx API key and project ID.
 
-# Install dependencies
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+**Stilliu runs without credentials.** With no `.env`, the backend starts in demo mode and serves fixtures, so every screen is still clickable. You only need an IBM account to see live generation.
 
-# Configure credentials — copy .env.example to .env and fill in your key + project ID
-# Do NOT overwrite an existing .env
+> Never commit `backend/.env`. It's gitignored, and `backend/.dockerignore` keeps it out of image layers too — Compose injects it at runtime instead.
 
-# Start (live mode)
-.\start.bat
+---
 
-# Start (demo mode — no API calls, no credentials needed)
-.\start_demo.bat
+### Option A — Docker (any OS)
+
+**Prerequisite:** Docker Desktop (Windows/macOS) or Docker Engine + Compose v2 (Linux).
+
+```bash
+docker compose up --build
 ```
 
-> **PowerShell note:** Always prefix batch files with `.\` in PowerShell. The server takes ~8s to warm up SDK clients on first start — this is expected and logged.
+Frontend on <http://localhost:5173>, backend on <http://localhost:8000> (API docs at `/docs`). Both directories are bind-mounted, so edits on your machine hot-reload inside the containers.
 
-### Frontend
+```bash
+docker compose down          # stop
+docker compose up --build -d # rebuild and run detached
+docker compose logs -f backend
+```
+
+Run the tests inside the container:
+
+```bash
+docker compose exec backend python -m pytest tests/ -v
+docker compose exec backend python selfcheck.py
+```
+
+> **Older Compose:** the `env_file: required: false` key needs Compose v2.24+. On older versions, `touch backend/.env` to create an empty file and the stack will come up in demo mode.
+
+---
+
+### Option B — Native
+
+**Prerequisites:** Python 3.10+, Node 18+.
+
+Two terminals. Backend first.
+
+<details open>
+<summary><b>Windows (PowerShell)</b></summary>
 
 ```powershell
+# Terminal 1 — backend
+cd backend
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+
+# Terminal 2 — frontend
 cd frontend
 npm install
 npm run dev
-# Open http://localhost:5173
 ```
 
-### Run Tests
+Batch shortcuts also exist: `.\start.bat` (live) and `.\start_demo.bat` (demo mode).
+
+Two PowerShell gotchas worth knowing, because both have bitten this project:
+
+- Always prefix batch files with `.\` — `start.bat` alone won't resolve.
+- `&&` is **not** a statement separator in Windows PowerShell 5.1. Use `;` instead, or upgrade to PowerShell 7.
+- If activation is blocked, run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` in that terminal.
+
+</details>
+
+<details>
+<summary><b>macOS / Linux (bash or zsh)</b></summary>
+
+```bash
+# Terminal 1 — backend
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+
+# Terminal 2 — frontend
+cd frontend
+npm install
+npm run dev
+```
+
+For demo mode without credentials: `DEMO_MODE=true uvicorn app.main:app --reload --port 8000`.
+
+On Debian/Ubuntu you may need `sudo apt install python3-venv` first.
+
+</details>
+
+Then open <http://localhost:5173>. The backend takes roughly 8 seconds to warm its SDK clients on first start — that's expected and logged.
+
+### Tests
 
 ```bash
 cd backend
-python -m pytest tests/ -v
+python -m pytest tests/ -v   # full suite
+python selfcheck.py          # deterministic math only — numpy, no network, no credentials
 ```
 
-### Offline self-check (no credentials needed)
+`selfcheck.py` validates stylometry, guardrails, and scoring with numpy alone. It needs no watsonx SDK and no network, so it's the fastest way to confirm a checkout is sound.
+
+---
+
+### Troubleshooting
+
+**Scores show `NaN/100`, or the dials are labelled "Generic Score" / "Voice Distance".**
+You're running a stale Vite bundle against the current backend — the old JS reads response fields that no longer exist. Vite's dependency cache survives a plain restart, so clear it:
 
 ```bash
-cd backend
-python selfcheck.py
+# stop the dev server first (Ctrl+C)
+cd frontend
+rm -rf node_modules/.vite    # PowerShell: Remove-Item -Recurse -Force node_modules\.vite
+npm run dev
 ```
 
-Validates all deterministic math (stylometry, guardrails, scoring) with numpy only — no watsonx SDK, no network.
+Then hard-reload the browser (Ctrl+Shift+R, or Cmd+Shift+R on macOS). If it persists, open DevTools → Network → tick "Disable cache" and reload once with DevTools open.
+
+**Port already in use.** Something else holds 8000 or 5173.
+`netstat -ano | findstr :8000` on Windows, `lsof -i :8000` on macOS/Linux.
+
+**Frontend loads but every API call fails.** The backend isn't up, or isn't on 8000. Check <http://localhost:8000/health> directly. Under Docker, confirm `VITE_API_TARGET=http://backend:8000` — inside the frontend container, `localhost` is the frontend itself.
+
+**Docker: esbuild or rollup "wrong binary" errors.** A host `node_modules` is shadowing the container's. The anonymous volume in `docker-compose.yml` prevents this; if you edited it, restore the `- /app/node_modules` line.
+
+**Docker: edits don't hot-reload.** inotify events don't cross bind mounts on Windows and macOS. Compose sets `VITE_USE_POLLING=true` to handle this — verify it's still in the frontend service's environment.
+
+**The style picker is empty.** It's populated from `GET /api/styles`. Hit <http://localhost:8000/api/styles> directly; if that 404s, your backend predates the style library.
+
 
 ---
 
