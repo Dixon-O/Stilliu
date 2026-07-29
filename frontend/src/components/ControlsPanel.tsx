@@ -171,29 +171,42 @@ export default function ControlsPanel({
               </p>
             )}
 
-            <div style={S.selRow}>
-              <span className="note">
-                {selected.length} of {room} chosen
-                {hasCustom ? ' · brief takes a slot' : ''}
-                {library ? ` · ${library.styles.length} available` : ''}
-              </span>
-              <span style={S.spacer} />
-              <button
-                className="btn btn--quiet btn--sm"
-                type="button"
-                onClick={onClearStyles}
-                disabled={selected.length === 0}
-              >
-                Clear all
-              </button>
-              <button
-                className="btn btn--quiet btn--sm"
-                type="button"
-                onClick={onRestoreDefaults}
-                disabled={!library}
-              >
-                Restore defaults
-              </button>
+            {/* Count, actions and search stay in view while the list scrolls —
+                they are what you reach for *during* browsing, not before it. */}
+            <div className="sticky-head">
+              <div style={S.selRow}>
+                <span className="note">
+                  {selected.length} of {room} chosen
+                  {hasCustom ? ' · brief takes a slot' : ''}
+                  {library ? ` · ${library.styles.length} available` : ''}
+                </span>
+                <span style={S.spacer} />
+                <button
+                  className="btn btn--quiet btn--sm"
+                  type="button"
+                  onClick={onClearStyles}
+                  disabled={selected.length === 0}
+                >
+                  Clear all
+                </button>
+                <button
+                  className="btn btn--quiet btn--sm"
+                  type="button"
+                  onClick={onRestoreDefaults}
+                  disabled={!library}
+                >
+                  Restore defaults
+                </button>
+              </div>
+
+              {library && (
+                <input
+                  className="input"
+                  placeholder="Search styles — try 'metaphor', 'argument', 'AI'"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              )}
             </div>
 
             {selected.length === 0 && !hasCustom && (
@@ -220,13 +233,6 @@ export default function ControlsPanel({
 
             {library && (
               <>
-                <input
-                  className="input"
-                  placeholder="Search styles — try 'metaphor', 'argument', 'AI'"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-
                 {grouped.map(({ group, items }) => {
                   const open = searching || openGroups.includes(group.id)
                   const chosenHere = items.filter((i) => selected.includes(i.name)).length
@@ -563,12 +569,15 @@ function voiceStrengthLabel(v: number): string {
 
 const S: Record<string, React.CSSProperties> = {
   card: { flex: 1, minHeight: 0 },
-  body: { display: 'flex', flexDirection: 'column', gap: 12, padding: '12px 13px', flex: 1 },
+  /* Roomier than the rest of the chrome on purpose: this is the panel you sit in
+     and work, so rows get space to be hit and read rather than being packed.
+     The 14px top padding is what `.sticky-head`'s offset cancels. */
+  body: { display: 'flex', flexDirection: 'column', gap: 14, padding: '14px 15px', flex: 1 },
   selRow: { display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' },
   spacer: { flex: 1 },
-  group: { display: 'flex', flexDirection: 'column', gap: 6 },
+  group: { display: 'flex', flexDirection: 'column', gap: 7 },
   chevron: { fontSize: 8 },
-  styleList: { display: 'flex', flexDirection: 'column', gap: 5 },
+  styleList: { display: 'flex', flexDirection: 'column', gap: 6 },
   styleText: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
   toggleText: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
   rule: { border: 'none', borderTop: '1px solid var(--rule)', margin: '2px 0' },
