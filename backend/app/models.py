@@ -45,9 +45,12 @@ class WriterControls(BaseModel):
     )
     personas: Optional[list[str]] = Field(
         default=None,
-        description="Which style preset names to generate, in order. None = the "
-                    "three defaults. Names must match app.services.styles.STYLES; "
-                    "unknown names are ignored. Capped at MAX_SELECTED_STYLES.",
+        description="Which style preset names to generate, in order. None means "
+                    "'writer hasn't chosen' → the defaults are used. An empty "
+                    "list means 'writer cleared the selection' and is honoured "
+                    "as empty — the two are deliberately NOT the same. Names must "
+                    "match app.services.styles.STYLES; unknown names are ignored. "
+                    "Capped at MAX_SELECTED_STYLES.",
     )
     custom_persona: str = Field(
         default="",
@@ -71,6 +74,50 @@ class WriterControls(BaseModel):
         le=1.0,
         description="How strongly to anchor to the author's voice. 0 = ignore voice, "
                     "1 = hug the voice tightly. Trades off against distinctiveness.",
+    )
+
+    # ── Narration ─────────────────────────────────────────────────────────────
+    # Every one of these defaults to a no-op value, so a request that omits them
+    # produces byte-identical prompts to before they existed.
+    pov: str = Field(
+        default="keep",
+        description="Narrative person: 'keep' (leave as drafted), 'first', "
+                    "'second', or 'third'.",
+    )
+    tense: str = Field(
+        default="keep",
+        description="Narrative tense: 'keep', 'present', or 'past'.",
+    )
+    vocabulary: str = Field(
+        default="standard",
+        description="Diction register: 'plain' (short, concrete, Anglo-Saxon), "
+                    "'standard' (no instruction), or 'elevated' (precise and "
+                    "uncommon where it earns its place).",
+    )
+    rhythm: str = Field(
+        default="keep",
+        description="Sentence-length distribution: 'keep', 'uniform' (even), "
+                    "'varied' (long then short), or 'jagged' (extremes and "
+                    "fragments). Directly targets a measured stylometry feature.",
+    )
+    opening: str = Field(
+        default="keep",
+        description="How the first sentence works: 'keep', 'claim', 'image', "
+                    "'question', or 'in_media_res'.",
+    )
+
+    # ── Writer's own word lists ───────────────────────────────────────────────
+    banned_words: str = Field(
+        default="",
+        description="Comma- or newline-separated words and phrases this writer "
+                    "never wants to see. Applied on top of each style's own ban "
+                    "list and the AI-cadence ban.",
+    )
+    keep_phrases: str = Field(
+        default="",
+        description="Comma- or newline-separated phrases that must survive "
+                    "verbatim in every direction — a line the writer already "
+                    "likes and does not want rewritten.",
     )
 
 
@@ -142,6 +189,36 @@ class AnalyzeResponse(BaseModel):
     draft_scores: DraftScores
     directions: list[DirectionCard]
     baseline_preview: str = Field("", description="First 160 chars of the generic baseline, for transparency.")
+    demo_mode: bool = False
+
+
+# ── /api/direction (one style at a time) ─────────────────────────────────────
+
+class DirectionRequest(BaseModel):
+    """
+    Regenerate exactly one direction against the current controls.
+
+    This is what lets the writer tweak a control and re-run only the direction
+    they're looking at, instead of paying for the whole batch again.
+    """
+    draft: str = Field(..., min_length=10)
+    voice_samples: Optional[list[str]] = None
+    controls: WriterControls = Field(default_factory=WriterControls)
+    style: str = Field(
+        ..., min_length=1,
+        description="One style preset name, or styles.CUSTOM_STYLE_NAME to use "
+                    "the controls' custom_persona brief.",
+    )
+
+
+class DirectionResponse(BaseModel):
+    direction: DirectionCard
+    draft_scores: DraftScores = Field(
+        ...,
+        description="Recomputed alongside the direction so the draft dials stay "
+                    "consistent with the deltas shown on the card.",
+    )
+    baseline_preview: str = ""
     demo_mode: bool = False
 
 

@@ -87,7 +87,9 @@ from app.services.styles import (  # noqa: E402
     STYLES_BY_NAME,
     DEFAULT_STYLE_NAMES,
     MAX_SELECTED_STYLES,
+    CUSTOM_STYLE_NAME,
     build_instruction,
+    custom_style,
 )
 
 PERSONAS = STYLES
@@ -98,33 +100,61 @@ def _resolve_personas(controls) -> list[dict]:
     """
     Select which styles to run, in the order the writer picked them.
 
-    Unknown names are ignored rather than raising — the UI and the library can
-    drift across a deploy, and a stale chip shouldn't fail the whole request.
+    Three cases, and the distinction between the last two is the whole point:
+
+      * ``personas is None``  — the writer hasn't opened the picker yet, so fall
+        back to the defaults and give them something to look at.
+      * ``personas == []``    — the writer deliberately cleared the selection.
+        Honour it and return nothing. Silently reinstating the defaults here is
+        what used to make the picker feel like it was fighting the writer.
+      * a non-empty list      — use it. Unknown names are dropped rather than
+        raising, since the UI and the library can drift across a deploy and a
+        stale chip shouldn't fail the request. If *nothing* in the list
+        resolves, that's a drift bug rather than an intent to clear, so the
+        defaults still apply.
+
+    A custom brief is appended in every case, including the cleared one — it's
+    an independent control and shouldn't need a preset selected to work. It
+    occupies one of the ``MAX_SELECTED_STYLES`` slots rather than sitting past
+    them, so a full preset selection loses its last preset rather than the brief.
     """
+    names = getattr(controls, "personas", None)
+    cleared = names is not None and len(names) == 0
+
     chosen: list[dict] = []
     seen: set[str] = set()
-    names = getattr(controls, "personas", None)
-    if names:
-        for n in names:
-            if n in STYLES_BY_NAME and n not in seen:
-                chosen.append(STYLES_BY_NAME[n])
-                seen.add(n)
-    if not chosen:
+    for n in names or []:
+        if n in STYLES_BY_NAME and n not in seen:
+            chosen.append(STYLES_BY_NAME[n])
+            seen.add(n)
+
+    if not chosen and not cleared:
         chosen = [STYLES_BY_NAME[n] for n in DEFAULT_STYLE_NAMES if n in STYLES_BY_NAME]
 
-    custom = getattr(controls, "custom_persona", "") or ""
-    if custom.strip():
-        brief = custom.strip()
-        chosen.append({
-            "name": "Your Custom Direction",
-            "group": "custom",
-            "description": brief[:80],
-            "instruction": f"Style brief from the writer, follow it precisely: {brief}",
-            "avoid": "",
-        })
+    # Each direction is a parallel LLM call, so the total is capped. A custom
+    # brief takes one of those slots rather than being appended past the cap:
+    # it's the writer's most explicit instruction, so it must never be the thing
+    # that gets silently dropped, and the UI gives it a tab either way.
+    custom = (getattr(controls, "custom_persona", "") or "").strip()
+    if custom:
+        chosen = chosen[: MAX_SELECTED_STYLES - 1]
+        chosen.append(custom_style(custom))
 
-    # Each direction is a parallel LLM call — bound latency and spend.
     return chosen[:MAX_SELECTED_STYLES]
+
+
+def resolve_single_style(style_name: str, controls) -> dict | None:
+    """
+    Look up one style by name for POST /api/direction, including the writer's
+    custom brief. Returns None if the name isn't a real style.
+    """
+    if style_name in STYLES_BY_NAME:
+        return STYLES_BY_NAME[style_name]
+    if style_name == CUSTOM_STYLE_NAME:
+        brief = (getattr(controls, "custom_persona", "") or "").strip()
+        if brief:
+            return custom_style(brief)
+    return None
 
 
 # ── Prompt construction ───────────────────────────────────────────────────────
@@ -173,6 +203,77 @@ _AI_CADENCE_BAN = (
     "'meticulous', 'intricate'."
 )
 
+# ── Narration controls ────────────────────────────────────────────────────────
+# Each table deliberately omits its no-op value ("keep" / "standard"), so an
+# untouched control contributes nothing to the prompt rather than contributing
+# an instruction to change nothing — which models tend to over-obey.
+
+_POV_CLAUSE = {
+    "first":  "Write in the first person.",
+    "second": "Address the reader directly in the second person.",
+    "third":  "Write in the third person.",
+}
+_TENSE_CLAUSE = {
+    "present": "Use the present tense throughout.",
+    "past":    "Use the past tense throughout.",
+}
+_VOCABULARY_CLAUSE = {
+    "plain": (
+        "Keep the vocabulary plain and concrete. Prefer the shorter, older, "
+        "more physical word over the longer Latinate one. No jargon."
+    ),
+    "elevated": (
+        "Reach for precise and uncommon words where they do real work, but never "
+        "for ornament alone. Precision, not decoration."
+    ),
+}
+_RHYTHM_CLAUSE = {
+    "uniform": (
+        "Hold sentence lengths close to even so the rhythm is steady and unhurried."
+    ),
+    "varied": (
+        "Vary sentence length deliberately — follow a long sentence with a short "
+        "one so the rhythm breathes."
+    ),
+    "jagged": (
+        "Make the rhythm deliberately uneven: very long sentences set against "
+        "fragments, with abrupt stops."
+    ),
+}
+_OPENING_CLAUSE = {
+    "claim":        "Open with the boldest claim in the piece, stated flatly, in the first sentence.",
+    "image":        "Open on a concrete image or physical detail before any abstraction.",
+    "question":     "Open with a question that the rest of the piece answers.",
+    "in_media_res": "Open mid-action with no setup, and let the reader catch up.",
+}
+
+_NARRATION_TABLES = (
+    ("pov", _POV_CLAUSE),
+    ("tense", _TENSE_CLAUSE),
+    ("vocabulary", _VOCABULARY_CLAUSE),
+    ("rhythm", _RHYTHM_CLAUSE),
+    ("opening", _OPENING_CLAUSE),
+)
+
+#: Ceiling on the writer's own word lists — long lists dilute the instruction
+#: and eat the context the draft needs.
+_MAX_WORD_LIST = 25
+
+
+def _split_word_list(raw: str) -> list[str]:
+    """Parse a comma- or newline-separated control into clean, de-duplicated terms."""
+    if not raw:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for chunk in re.split(r"[,\n;]+", raw):
+        term = chunk.strip().strip('"').strip("'").strip()
+        key = term.lower()
+        if term and key not in seen:
+            out.append(term)
+            seen.add(key)
+    return out[:_MAX_WORD_LIST]
+
 
 def _controls_clause(controls) -> str:
     """Turn writer controls into an explicit instruction clause."""
@@ -194,6 +295,26 @@ def _controls_clause(controls) -> str:
     audience = (getattr(controls, "audience", "") or "").strip()
     if audience:
         bits.append(f"Write for this audience: {audience}.")
+
+    for attr, table in _NARRATION_TABLES:
+        value = getattr(controls, attr, None)
+        if value in table:
+            bits.append(table[value])
+
+    # The writer's own lists come last so they read as the final word, and are
+    # phrased as hard constraints rather than preferences.
+    keeps = _split_word_list(getattr(controls, "keep_phrases", "") or "")
+    if keeps:
+        quoted = "; ".join(f'"{k}"' for k in keeps)
+        bits.append(
+            f"These phrases must appear verbatim and unaltered, exactly as written: {quoted}."
+        )
+    banned = _split_word_list(getattr(controls, "banned_words", "") or "")
+    if banned:
+        bits.append(
+            "Never use these words or phrases, in any form: " + ", ".join(banned) + "."
+        )
+
     if getattr(controls, "avoid_ai_cadence", False):
         bits.append(_AI_CADENCE_BAN)
     if getattr(controls, "preserve_facts", True):
@@ -348,6 +469,11 @@ def generate_divergent_directions(
         return _fixture_directions()
 
     personas = _resolve_personas(controls)
+    # An empty selection is a legitimate state now that clearing the picker is
+    # honoured. Bail before ThreadPoolExecutor, which raises on max_workers=0.
+    if not personas:
+        return []
+
     results_map: dict[str, dict] = {}
 
     with ThreadPoolExecutor(max_workers=min(4, len(personas))) as pool:
@@ -386,12 +512,15 @@ def regenerate_direction(
     if settings.demo_mode:
         return {"name": persona_name, "description": persona_description, "text": draft}
 
-    persona = PERSONAS_BY_NAME.get(persona_name, {
+    # Resolve through the same path as a first-pass generation so a refined
+    # custom direction keeps the writer's actual brief instead of falling back
+    # to a brief reconstructed from its own truncated description.
+    persona = resolve_single_style(persona_name, controls) or {
         "name": persona_name,
         "description": persona_description,
         "instruction": f"Style brief: {persona_description}",
         "avoid": "",
-    })
+    }
     model = get_generation_client()
     prompt = (
         f"{build_instruction(persona)}{_controls_clause(controls)}"

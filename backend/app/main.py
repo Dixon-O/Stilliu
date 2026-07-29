@@ -3,14 +3,18 @@ main.py — FastAPI application entry point.
 
 Routes:
   GET  /health                   → liveness check
+  GET  /api/styles               → the grouped style preset library
   POST /api/score                → fast path: draft scores only, no generation
-  POST /api/analyze              → score draft + generate + score directions
+  POST /api/analyze              → score draft + generate + score every direction
+  POST /api/direction            → regenerate ONE direction against new controls
   POST /api/fingerprint/validate → validate voice samples (count/length check)
 """
 from __future__ import annotations
 import logging
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,11 +25,14 @@ from app.models import (
     AnalyzeRequest, AnalyzeResponse,
     AxisScores, AxisDeltas, DraftScores, DirectionCard,
     ScoreOnlyRequest, ScoreOnlyResponse,
+    DirectionRequest, DirectionResponse,
     FingerprintRequest, FingerprintResponse,
+    WriterControls,
 )
 from app.services.embeddings import mean_embedding, split_into_paragraphs
 from app.services.generation import (
     generate_baseline, generate_divergent_directions, regenerate_direction,
+    generate_single_direction, resolve_single_style,
 )
 from app.services.scoring import (
     compute_distinctiveness, compute_voice_match, score_axes, score_summary,
@@ -150,6 +157,170 @@ def _fixture_analyze_response() -> AnalyzeResponse:
     )
 
 
+def _fixture_direction(style_name: str) -> DirectionCard:
+    """A single fixture card, for demo-mode single-style regeneration."""
+    fixture = _fixture_analyze_response()
+    for card in fixture.directions:
+        if card.persona == style_name:
+            return card
+    return fixture.directions[0].model_copy(update={
+        "persona": style_name,
+        "persona_description": f"Fixture direction standing in for {style_name}.",
+    })
+
+
+# ── Shared scoring pipeline ───────────────────────────────────────────────────
+# /api/score, /api/analyze and /api/direction all need the same groundwork:
+# embed the draft, generate the bland baseline, embed that, optionally build the
+# voice centroid, then score the draft against it. It lives here once so the
+# three endpoints cannot drift apart — a direction regenerated on its own must
+# be measured against exactly the same anchors as one from a full batch, or its
+# deltas would not be comparable.
+
+@dataclass
+class _ScoringContext:
+    draft: str
+    draft_vec: Any
+    baseline_text: str
+    baseline_vec: Any
+    voice_centroid: Any | None
+    voice_samples: list[str] = field(default_factory=list)
+    controls: WriterControls = field(default_factory=WriterControls)
+
+    @property
+    def source_pool(self) -> list[str]:
+        """Everything a claim is allowed to be grounded in."""
+        return [self.draft] + self.voice_samples
+
+
+async def _prepare_context(
+    loop: asyncio.AbstractEventLoop,
+    draft: str,
+    voice_samples: list[str],
+    controls: WriterControls,
+) -> tuple[_ScoringContext, DraftScores]:
+    """Embed the draft, generate and embed the baseline, score the draft."""
+    # Phase A — draft embed and baseline generation are independent.
+    draft_paras = split_into_paragraphs(draft)
+    draft_vec, baseline_text = await asyncio.gather(
+        loop.run_in_executor(None, mean_embedding, draft_paras),
+        loop.run_in_executor(None, generate_baseline, draft),
+    )
+
+    # Phase B — baseline embed and voice centroid are also independent.
+    baseline_paras = split_into_paragraphs(baseline_text)
+    if voice_samples:
+        from app.services.fingerprint import build_voice_centroid
+        baseline_vec, voice_centroid = await asyncio.gather(
+            loop.run_in_executor(None, mean_embedding, baseline_paras),
+            loop.run_in_executor(None, build_voice_centroid, voice_samples),
+        )
+    else:
+        baseline_vec = await loop.run_in_executor(None, mean_embedding, baseline_paras)
+        voice_centroid = None
+
+    draft_dist, _, _ = compute_distinctiveness(draft_vec, baseline_vec, draft, baseline_text)
+    draft_voice: float | None = None
+    if voice_centroid is not None:
+        draft_voice, _, _ = compute_voice_match(draft_vec, voice_centroid, draft, voice_samples)
+
+    ctx = _ScoringContext(
+        draft=draft,
+        draft_vec=draft_vec,
+        baseline_text=baseline_text,
+        baseline_vec=baseline_vec,
+        voice_centroid=voice_centroid,
+        voice_samples=voice_samples,
+        controls=controls,
+    )
+    return ctx, DraftScores(distinctiveness=draft_dist, voice_match=draft_voice)
+
+
+def _score_against(ctx: _ScoringContext, text: str, vec: Any) -> dict:
+    return score_axes(
+        draft_vector=ctx.draft_vec,
+        draft_str=ctx.draft,
+        baseline_vector=ctx.baseline_vec,
+        baseline_str=ctx.baseline_text,
+        # With no voice samples there's no centroid to compare against, so the
+        # draft stands in. The resulting value is a draft-vs-draft artifact and
+        # is suppressed before it reaches the response.
+        voice_centroid=ctx.voice_centroid if ctx.voice_centroid is not None else ctx.draft_vec,
+        voice_samples=ctx.voice_samples,
+        direction_vector=vec,
+        direction_str=text,
+    )
+
+
+async def _build_direction_card(
+    loop: asyncio.AbstractEventLoop,
+    d: dict,
+    ctx: _ScoringContext,
+) -> DirectionCard:
+    """Embed, score, faithfulness-check and (if weak) refine one direction."""
+    dir_vec = await loop.run_in_executor(
+        None, mean_embedding, split_into_paragraphs(d["text"]))
+    axes = _score_against(ctx, d["text"], dir_vec)
+
+    faith_score, unsupported = check_faithfulness(d["text"], ctx.source_pool)
+    refined = False
+
+    # ── Refine loop: regenerate if weak ──────────────────────────────────────
+    needs_refine = (
+        axes["distinctiveness"] < REFINE_DISTINCTIVENESS_MIN
+        or (ctx.controls.preserve_facts and faith_score < REFINE_FAITHFULNESS_MIN)
+    )
+    if needs_refine:
+        feedback_parts = []
+        if axes["distinctiveness"] < REFINE_DISTINCTIVENESS_MIN:
+            feedback_parts.append(
+                f"distinctiveness too low ({axes['distinctiveness']:.0f}/100) — "
+                "push the style further from generic AI prose"
+            )
+        if ctx.controls.preserve_facts and faith_score < REFINE_FAITHFULNESS_MIN:
+            feedback_parts.append(
+                f"faithfulness too low ({faith_score}/100) — "
+                f"remove invented claims: {', '.join(unsupported[:3])}"
+            )
+        new_d = await loop.run_in_executor(
+            None, regenerate_direction,
+            ctx.draft, d["name"], d["description"],
+            ctx.voice_samples, ctx.controls, "; ".join(feedback_parts),
+        )
+        new_vec = await loop.run_in_executor(
+            None, mean_embedding, split_into_paragraphs(new_d["text"]))
+        axes = _score_against(ctx, new_d["text"], new_vec)
+        faith_score, unsupported = check_faithfulness(new_d["text"], ctx.source_pool)
+        d = new_d
+        refined = True
+
+    has_voice = ctx.voice_centroid is not None
+    # Don't let the summary claim a voice match when there are no voice samples.
+    summary_axes = dict(axes)
+    if not has_voice:
+        summary_axes["voice_match"] = None
+
+    return DirectionCard(
+        persona=d["name"],
+        persona_description=d["description"],
+        text=d["text"],
+        scores=AxisScores(
+            distinctiveness=axes["distinctiveness"],
+            voice_match=axes["voice_match"] if has_voice else None,
+            on_message=axes["on_message"],
+        ),
+        deltas=AxisDeltas(
+            distinctiveness=axes["delta_distinctiveness"],
+            voice_match=axes["delta_voice_match"] if has_voice else None,
+            on_message=axes["delta_on_message"],
+        ),
+        faithfulness=faith_score,
+        unsupported_claims=unsupported,
+        summary=score_summary(summary_axes),
+        refined=refined,
+    )
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/health", response_model=HealthResponse)
@@ -193,45 +364,25 @@ async def score_only(req: ScoreOnlyRequest):
     try:
         async def _run():
             loop = asyncio.get_event_loop()
-            draft_paras = split_into_paragraphs(req.draft)
-            draft_vec, baseline_text = await asyncio.gather(
-                loop.run_in_executor(None, mean_embedding, draft_paras),
-                loop.run_in_executor(None, generate_baseline, req.draft),
-            )
-            baseline_paras = split_into_paragraphs(baseline_text)
-            baseline_vec = await loop.run_in_executor(None, mean_embedding, baseline_paras)
+            ctx, draft_scores = await _prepare_context(
+                loop, req.draft, req.voice_samples or [], WriterControls())
 
-            dist_score, _, _ = compute_distinctiveness(
-                draft_vec, baseline_vec, req.draft, baseline_text)
-
-            voice_score: float | None = None
-            if req.voice_samples:
-                from app.services.fingerprint import build_voice_centroid
-                voice_centroid = await loop.run_in_executor(
-                    None, build_voice_centroid, req.voice_samples)
-                voice_score, _, _ = compute_voice_match(
-                    draft_vec, voice_centroid, req.draft, req.voice_samples)
-
-            draft_scores = DraftScores(
-                distinctiveness=dist_score,
-                voice_match=voice_score,
-                summary=score_summary({
-                    "distinctiveness": dist_score,
-                    "voice_match": voice_score,
-                    "on_message": 100.0,
-                    "draft_distinctiveness": dist_score,
-                    "draft_voice_match": voice_score,
-                    "delta_distinctiveness": 0.0,
-                    "delta_voice_match": 0.0,
-                    "delta_on_message": 0.0,
-                    "raw_dist_sem": 0.0, "raw_dist_sty": 0.0,
-                    "raw_voice_sem": 0.0, "raw_voice_sty": 0.0,
-                    "raw_msg_sem": 0.0,
-                }),
-            )
+            draft_scores.summary = score_summary({
+                "distinctiveness": draft_scores.distinctiveness,
+                "voice_match": draft_scores.voice_match,
+                "on_message": 100.0,
+                "draft_distinctiveness": draft_scores.distinctiveness,
+                "draft_voice_match": draft_scores.voice_match,
+                "delta_distinctiveness": 0.0,
+                "delta_voice_match": 0.0,
+                "delta_on_message": 0.0,
+                "raw_dist_sem": 0.0, "raw_dist_sty": 0.0,
+                "raw_voice_sem": 0.0, "raw_voice_sty": 0.0,
+                "raw_msg_sem": 0.0,
+            })
             return ScoreOnlyResponse(
                 draft_scores=draft_scores,
-                baseline_preview=baseline_text[:160].strip(),
+                baseline_preview=ctx.baseline_text[:160].strip(),
                 demo_mode=False,
             )
 
@@ -254,148 +405,37 @@ async def score_only(req: ScoreOnlyRequest):
 async def analyze(req: AnalyzeRequest):
     settings = get_settings()
 
+    # Validated before the try block: an HTTPException raised inside would be
+    # swallowed by the catch-all below and re-reported as a 500.
+    if req.controls.personas is not None and not req.controls.personas \
+            and not req.controls.custom_persona.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="No styles selected. Pick at least one style, or write a custom "
+                   "style brief.",
+        )
+
     if settings.demo_mode:
         return _fixture_analyze_response()
 
     try:
         async def _run():
             loop = asyncio.get_event_loop()
-            controls = req.controls
+            ctx, draft_scores = await _prepare_context(
+                loop, req.draft, req.voice_samples or [], req.controls)
 
-            # ── Phase A: draft embed + baseline generation (concurrent) ──────
-            draft_paras = split_into_paragraphs(req.draft)
-            draft_vec, baseline_text = await asyncio.gather(
-                loop.run_in_executor(None, mean_embedding, draft_paras),
-                loop.run_in_executor(None, generate_baseline, req.draft),
-            )
-
-            # ── Phase B: baseline embed + voice centroid (concurrent) ────────
-            baseline_paras = split_into_paragraphs(baseline_text)
-            voice_samples = req.voice_samples or []
-
-            if voice_samples:
-                from app.services.fingerprint import build_voice_centroid
-                baseline_vec, voice_centroid = await asyncio.gather(
-                    loop.run_in_executor(None, mean_embedding, baseline_paras),
-                    loop.run_in_executor(None, build_voice_centroid, voice_samples),
-                )
-            else:
-                baseline_vec = await loop.run_in_executor(None, mean_embedding, baseline_paras)
-                voice_centroid = None
-
-            # ── Draft scores ─────────────────────────────────────────────────
-            draft_dist, _, _ = compute_distinctiveness(
-                draft_vec, baseline_vec, req.draft, baseline_text)
-            draft_voice: float | None = None
-            if voice_centroid is not None:
-                draft_voice, _, _ = compute_voice_match(
-                    draft_vec, voice_centroid, req.draft, voice_samples)
-
-            draft_scores = DraftScores(
-                distinctiveness=draft_dist,
-                voice_match=draft_voice,
-            )
-
-            # ── Phase C: generate directions (parallel inside executor) ──────
             raw_directions = await loop.run_in_executor(
-                None, generate_divergent_directions, req.draft, voice_samples, controls
+                None, generate_divergent_directions,
+                req.draft, ctx.voice_samples, req.controls,
             )
-
-            # ── Phase D: embed + score + faithfulness check each direction ───
-            source_pool = [req.draft] + voice_samples
-
-            async def _score_direction(d: dict) -> DirectionCard:
-                dir_paras = split_into_paragraphs(d["text"])
-                dir_vec = await loop.run_in_executor(None, mean_embedding, dir_paras)
-
-                vc = voice_centroid if voice_centroid is not None else draft_vec
-                axes = score_axes(
-                    draft_vector=draft_vec,
-                    draft_str=req.draft,
-                    baseline_vector=baseline_vec,
-                    baseline_str=baseline_text,
-                    voice_centroid=vc,
-                    voice_samples=voice_samples,
-                    direction_vector=dir_vec,
-                    direction_str=d["text"],
-                )
-
-                faith_score, unsupported = check_faithfulness(d["text"], source_pool)
-                refined = False
-
-                # ── Refine loop: regenerate if weak ──────────────────────────
-                needs_refine = (
-                    axes["distinctiveness"] < REFINE_DISTINCTIVENESS_MIN
-                    or (controls.preserve_facts and faith_score < REFINE_FAITHFULNESS_MIN)
-                )
-                if needs_refine:
-                    feedback_parts = []
-                    if axes["distinctiveness"] < REFINE_DISTINCTIVENESS_MIN:
-                        feedback_parts.append(
-                            f"distinctiveness too low ({axes['distinctiveness']:.0f}/100) — "
-                            "push the style further from generic AI prose"
-                        )
-                    if controls.preserve_facts and faith_score < REFINE_FAITHFULNESS_MIN:
-                        feedback_parts.append(
-                            f"faithfulness too low ({faith_score}/100) — "
-                            f"remove invented claims: {', '.join(unsupported[:3])}"
-                        )
-                    feedback = "; ".join(feedback_parts)
-                    new_d = await loop.run_in_executor(
-                        None, regenerate_direction,
-                        req.draft, d["name"], d["description"],
-                        voice_samples, controls, feedback,
-                    )
-                    new_paras = split_into_paragraphs(new_d["text"])
-                    new_vec = await loop.run_in_executor(None, mean_embedding, new_paras)
-                    axes = score_axes(
-                        draft_vector=draft_vec,
-                        draft_str=req.draft,
-                        baseline_vector=baseline_vec,
-                        baseline_str=baseline_text,
-                        voice_centroid=vc,
-                        voice_samples=voice_samples,
-                        direction_vector=new_vec,
-                        direction_str=new_d["text"],
-                    )
-                    faith_score, unsupported = check_faithfulness(new_d["text"], source_pool)
-                    d = new_d
-                    refined = True
-
-                voice_score = axes["voice_match"] if voice_centroid is not None else None
-                # Don't let the summary claim a voice match when there are no
-                # voice samples — the axes value is a draft-vs-draft artifact.
-                summary_axes = dict(axes)
-                if voice_centroid is None:
-                    summary_axes["voice_match"] = None
-                return DirectionCard(
-                    persona=d["name"],
-                    persona_description=d["description"],
-                    text=d["text"],
-                    scores=AxisScores(
-                        distinctiveness=axes["distinctiveness"],
-                        voice_match=voice_score,
-                        on_message=axes["on_message"],
-                    ),
-                    deltas=AxisDeltas(
-                        distinctiveness=axes["delta_distinctiveness"],
-                        voice_match=axes["delta_voice_match"] if voice_centroid is not None else None,
-                        on_message=axes["delta_on_message"],
-                    ),
-                    faithfulness=faith_score,
-                    unsupported_claims=unsupported,
-                    summary=score_summary(summary_axes),
-                    refined=refined,
-                )
-
             direction_cards = list(await asyncio.gather(
-                *[_score_direction(d) for d in raw_directions]
+                *[_build_direction_card(loop, d, ctx) for d in raw_directions]
             ))
 
             return AnalyzeResponse(
                 draft_scores=draft_scores,
                 directions=direction_cards,
-                baseline_preview=baseline_text[:160].strip(),
+                baseline_preview=ctx.baseline_text[:160].strip(),
                 demo_mode=False,
             )
 
@@ -408,6 +448,70 @@ async def analyze(req: AnalyzeRequest):
         return fixture
     except Exception as exc:
         logger.error("Analysis error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/direction", response_model=DirectionResponse)
+async def direction(req: DirectionRequest):
+    """
+    Regenerate exactly one direction.
+
+    This is the endpoint that makes the controls feel direct rather than
+    batched: change a control, re-run only the direction you're reading. It
+    costs one generation instead of up to six, and because it goes through the
+    same _prepare_context anchors, the deltas it returns stay comparable with
+    the ones from a full /api/analyze run.
+    """
+    settings = get_settings()
+
+    style = resolve_single_style(req.style, req.controls)
+    if style is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown style {req.style!r}. Fetch GET /api/styles for the "
+                   f"current list, or set controls.custom_persona to use a brief.",
+        )
+
+    if settings.demo_mode:
+        fixture = _fixture_analyze_response()
+        return DirectionResponse(
+            direction=_fixture_direction(req.style),
+            draft_scores=fixture.draft_scores,
+            baseline_preview=fixture.baseline_preview,
+            demo_mode=True,
+        )
+
+    try:
+        async def _run():
+            loop = asyncio.get_event_loop()
+            ctx, draft_scores = await _prepare_context(
+                loop, req.draft, req.voice_samples or [], req.controls)
+
+            raw = await loop.run_in_executor(
+                None, generate_single_direction,
+                req.draft, style, ctx.voice_samples, req.controls,
+            )
+            card = await _build_direction_card(loop, raw, ctx)
+            return DirectionResponse(
+                direction=card,
+                draft_scores=draft_scores,
+                baseline_preview=ctx.baseline_text[:160].strip(),
+                demo_mode=False,
+            )
+
+        return await asyncio.wait_for(_run(), timeout=settings.analyze_timeout)
+
+    except asyncio.TimeoutError:
+        logger.warning("Single-direction generation timed out for %s.", req.style)
+        raise HTTPException(
+            status_code=504,
+            detail=f"Generating {req.style} timed out. Your other directions are "
+                   f"unaffected — try again.",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Direction error for %s: %s", req.style, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
 

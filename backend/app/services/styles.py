@@ -290,6 +290,24 @@ DEFAULT_STYLE_NAMES: list[str] = ["Sparse Minimalist", "The Arguer", "Sensory-Le
 #: parallel LLM call, so this bounds both latency and token spend.
 MAX_SELECTED_STYLES = 6
 
+#: Label for the direction built from the writer's own free-text brief. It is
+#: not in STYLES (it has no fixed instruction), but the UI needs to name its tab
+#: and POST /api/direction needs to accept it, so both read it from here rather
+#: than hardcoding the string in two places.
+CUSTOM_STYLE_NAME = "Your Custom Direction"
+
+
+def custom_style(brief: str) -> dict:
+    """Build a one-off style from the writer's free-text brief."""
+    brief = brief.strip()
+    return {
+        "name": CUSTOM_STYLE_NAME,
+        "group": "custom",
+        "description": brief[:80],
+        "instruction": f"Style brief from the writer, follow it precisely: {brief}",
+        "avoid": "",
+    }
+
 
 def group_label(group_id: str) -> str:
     for g in GROUPS:
@@ -313,6 +331,7 @@ def styles_payload() -> dict:
         ],
         "defaults": DEFAULT_STYLE_NAMES,
         "max_selected": MAX_SELECTED_STYLES,
+        "custom_style_name": CUSTOM_STYLE_NAME,
     }
 
 
