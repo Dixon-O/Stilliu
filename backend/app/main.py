@@ -34,6 +34,7 @@ from app.services.generation import (
     generate_baseline, generate_divergent_directions, regenerate_direction,
     generate_single_direction, resolve_single_style,
 )
+from app.services import model_registry
 from app.services.scoring import (
     compute_distinctiveness, compute_voice_match, score_axes, score_summary,
 )
@@ -55,7 +56,7 @@ REFINE_FAITHFULNESS_MIN    = 60   # below this → too many hallucinations, rege
 async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info(
-        "Stilliu backend starting. demo_mode=%s  embed=%s  gen=%s  baseline=%s",
+        "Stilliu backend starting. demo_mode=%s  configured: embed=%s  gen=%s  baseline=%s",
         settings.demo_mode,
         settings.embedding_model_id,
         settings.generation_model_id,
@@ -71,6 +72,16 @@ async def lifespan(app: FastAPI):
             loop.run_in_executor(None, get_generation_client),
             loop.run_in_executor(None, get_baseline_client),
         )
+        # The configured ids above are only a request. Report what the region
+        # actually gave us, so the log and the UI badges agree with reality.
+        resolved = model_registry.cached()
+        if resolved is not None:
+            logger.info(
+                "Running with: embed=%s  gen=%s  baseline=%s",
+                resolved.embedding.model_id,
+                resolved.creative.model_id,
+                resolved.baseline.model_id,
+            )
         logger.info("SDK clients warmed up. Ready to serve requests.")
     yield
     logger.info("Stilliu backend shutting down.")
@@ -326,12 +337,16 @@ async def _build_direction_card(
 @app.get("/health", response_model=HealthResponse)
 async def health():
     settings = get_settings()
+    # Prefer the ids the region resolved to over the ones we asked for — the
+    # badges in the UI read this, and they should never claim a model that
+    # isn't loaded.
+    resolved = model_registry.cached()
     return HealthResponse(
         status="ok",
         demo_mode=settings.demo_mode,
-        embed_model=settings.embedding_model_id,
-        gen_model=settings.generation_model_id,
-        baseline_model=settings.baseline_model_id,
+        embed_model=resolved.embedding.model_id if resolved else settings.embedding_model_id,
+        gen_model=resolved.creative.model_id if resolved else settings.generation_model_id,
+        baseline_model=resolved.baseline.model_id if resolved else settings.baseline_model_id,
     )
 
 

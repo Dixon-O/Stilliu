@@ -1,12 +1,16 @@
 """
 generation.py — watsonx generation (HYBRID model strategy):
-  1. The "bland AI default" baseline — Granite instruct model (falls back to the
-     creative model if the Granite id is unavailable in-region). This is the
-     anchor for the Distinctiveness measurement.
-  2. Persona-constrained divergent directions — Llama-3-3-70b, run in parallel,
-     shaped by the writer's controls (format, length, tone, audience, voice).
+  1. The "bland AI default" baseline — a small, low-temperature instruct model
+     from a *different provider family* than the creative model, so the
+     Distinctiveness measurement has an independent anchor rather than being
+     scored against a colder version of itself.
+  2. Persona-constrained divergent directions — the strongest creative instruct
+     model the region hosts, run in parallel, shaped by the writer's controls
+     (format, length, tone, audience, voice).
 
-SDK clients are cached at module level — same pattern as embeddings.py.
+Neither role names a fixed model id. Availability differs per region, so both
+are resolved at startup against what this account can actually call — see
+model_registry.py. SDK clients are cached at module level, same as embeddings.py.
 """
 from __future__ import annotations
 import logging
@@ -18,6 +22,7 @@ from ibm_watsonx_ai.foundation_models import ModelInference
 from ibm_watsonx_ai.metanames import GenTextParamsMetaNames as GenParams
 
 from app.config import get_settings
+from app.services import model_registry
 
 logger = logging.getLogger(__name__)
 
@@ -36,46 +41,71 @@ def _api_client() -> APIClient:
     return _shared_api_client
 
 
+def resolved_models() -> model_registry.Resolution:
+    """The ids this region resolved to. Cached after the first call."""
+    return model_registry.resolve(_api_client(), get_settings())
+
+
+CREATIVE_PARAMS = {
+    GenParams.MAX_NEW_TOKENS: 400,
+    GenParams.TEMPERATURE: 0.8,
+    GenParams.TOP_P: 0.95,
+    GenParams.REPETITION_PENALTY: 1.15,
+}
+BASELINE_PARAMS = {GenParams.MAX_NEW_TOKENS: 300, GenParams.TEMPERATURE: 0.2}
+
+
+def _first_usable(candidates: list[str], params: dict, role: str) -> ModelInference:
+    """
+    Instantiate the first id that works. The registry already filtered to what
+    the region lists, so this only catches the gap between "listed" and "callable
+    by this project" — a per-account entitlement, say. Raising a clear error
+    beats an SDK traceback from three frames down.
+    """
+    last_error: Exception | None = None
+    for model_id in candidates:
+        try:
+            logger.info("Initialising %s client with %s ...", role, model_id)
+            client = ModelInference(model_id=model_id, api_client=_api_client(), params=params)
+            logger.info("%s client ready (%s).", role.capitalize(), model_id)
+            return client
+        except Exception as exc:  # pragma: no cover - depends on region availability
+            last_error = exc
+            logger.warning("%s model %s unavailable (%s); trying fallback.", role.capitalize(), model_id, exc)
+
+    raise RuntimeError(  # pragma: no cover
+        f"No usable {role} model in this region. Tried: {', '.join(candidates)}. "
+        f"Set the matching *_MODEL_ID to one your account hosts, or run with "
+        f"DEMO_MODE=true. Last error: {last_error}"
+    )
+
+
 def get_generation_client() -> ModelInference:
     global _generation_client
     if _generation_client is None:
-        settings = get_settings()
-        logger.info("Initialising creative generation client (one-time cold start)...")
-        _generation_client = ModelInference(
-            model_id=settings.generation_model_id,
-            api_client=_api_client(),
-            params={
-                GenParams.MAX_NEW_TOKENS: 400,
-                GenParams.TEMPERATURE: 0.8,
-                GenParams.TOP_P: 0.95,
-                GenParams.REPETITION_PENALTY: 1.15,
-            },
-        )
-        logger.info("Creative generation client ready.")
+        resolution = resolved_models()
+        candidates = [resolution.creative.model_id]
+        for extra in (resolution.baseline.model_id, get_settings().generation_model_id):
+            if extra and extra not in candidates:
+                candidates.append(extra)
+        _generation_client = _first_usable(candidates, CREATIVE_PARAMS, "creative")
     return _generation_client
 
 
 def get_baseline_client() -> ModelInference:
     """
-    Granite instruct client for the bland baseline. Falls back to the creative
-    model id if the Granite model can't be instantiated in-region.
+    The bland baseline that anchors Distinctiveness. The id comes from the
+    registry, which already prefers a different provider family from the
+    creative model; the creative id remains a last-ditch fallback so a
+    surprise instantiation failure degrades instead of taking the app down.
     """
     global _baseline_client
     if _baseline_client is None:
-        settings = get_settings()
-        for model_id in (settings.baseline_model_id, settings.generation_model_id):
-            try:
-                logger.info("Initialising baseline client with %s ...", model_id)
-                _baseline_client = ModelInference(
-                    model_id=model_id,
-                    api_client=_api_client(),
-                    params={GenParams.MAX_NEW_TOKENS: 300, GenParams.TEMPERATURE: 0.2},
-                )
-                break
-            except Exception as exc:  # pragma: no cover - depends on region availability
-                logger.warning("Baseline model %s unavailable (%s); trying fallback.", model_id, exc)
-        if _baseline_client is None:  # pragma: no cover
-            _baseline_client = get_generation_client()
+        resolution = resolved_models()
+        candidates = [resolution.baseline.model_id]
+        if resolution.creative.model_id not in candidates:
+            candidates.append(resolution.creative.model_id)
+        _baseline_client = _first_usable(candidates, BASELINE_PARAMS, "baseline")
     return _baseline_client
 
 # ── Styles ────────────────────────────────────────────────────────────────────
