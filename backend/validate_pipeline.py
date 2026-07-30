@@ -4,6 +4,10 @@ Run: python validate_pipeline.py  (from stilliu/backend with venv active)
 
 Requires real credentials in .env. For offline validation of the deterministic
 math with no credentials, run selfcheck.py instead.
+
+Every run is recorded to results/validation-<timestamp>.json (see runlog.py), so
+the headline number — how many directions actually beat the draft — can be
+compared across runs instead of scrolling out of the terminal.
 """
 import sys, os, time
 sys.path.insert(0, os.path.dirname(__file__))
@@ -11,7 +15,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from app.config import get_settings
 get_settings.cache_clear()
 
+import runlog
 from app.models import WriterControls
+from app.services import model_registry
 from app.services.embeddings import get_embedding_client, mean_embedding, split_into_paragraphs
 from app.services.generation import (
     get_generation_client, get_baseline_client,
@@ -44,7 +50,20 @@ t0 = time.time()
 get_embedding_client()
 get_generation_client()
 get_baseline_client()
-print(f"    Warm-up: {time.time()-t0:.1f}s")
+warmup_s = round(time.time() - t0, 1)
+print(f"    Warm-up: {warmup_s}s")
+
+# Which ids the region actually served. Recorded because a score is only
+# comparable across runs if the models behind it were the same.
+_res = model_registry.cached()
+models = {
+    "creative": _res.creative.model_id if _res else get_settings().generation_model_id,
+    "baseline": _res.baseline.model_id if _res else get_settings().baseline_model_id,
+    "embedding": _res.embedding.model_id if _res else get_settings().embedding_model_id,
+}
+print(f"    creative : {models['creative']}")
+print(f"    baseline : {models['baseline']}")
+print(f"    embedding: {models['embedding']}")
 
 print("\n[2] Scoring draft...")
 t0 = time.time()
@@ -68,7 +87,9 @@ controls = WriterControls(voice_strength=0.6)
 directions = generate_divergent_directions(DRAFT, VOICE_SAMPLES, controls)
 print(f"    Generation time  : {time.time()-t0:.1f}s")
 
+gen_s = round(time.time() - t0, 1)
 more_distinct = 0
+records: list[dict] = []
 source_pool = [DRAFT] + VOICE_SAMPLES
 for d in directions:
     dir_vec = mean_embedding(split_into_paragraphs(d["text"]))
@@ -81,6 +102,16 @@ for d in directions:
     faith, unsupported = check_faithfulness(d["text"], source_pool)
     if axes["distinctiveness"] > draft_dist:
         more_distinct += 1
+    records.append({
+        "style": d["name"],
+        "distinctiveness": axes["distinctiveness"],
+        "delta_distinctiveness": axes["delta_distinctiveness"],
+        "voice_match": axes["voice_match"],
+        "on_message": axes["on_message"],
+        "faithfulness": faith,
+        "unsupported_claims": unsupported,
+        "beat_the_draft": axes["distinctiveness"] > draft_dist,
+    })
     print(f"\n    [{d['name']}]")
     print(f"    distinctiveness={axes['distinctiveness']}/100 (Δ{axes['delta_distinctiveness']:+})  "
           f"voice={axes['voice_match']}/100  on_message={axes['on_message']}/100  faith={faith}/100")
@@ -93,3 +124,24 @@ print(f"Directions more distinctive than draft: {more_distinct}/{len(directions)
 print(f"Draft distinctiveness: {draft_dist}/100")
 print("PIPELINE VALIDATION COMPLETE")
 print("=" * 60)
+
+# The claim this script exists to support: a rewrite that scores higher than the
+# draft on the axis the tool is named for. Persist it so it is quotable.
+path = runlog.save("validation", {
+    "region": get_settings().watsonx_url,
+    "models": models,
+    "timings_s": {"warmup": warmup_s, "generation": gen_s},
+    "draft": {
+        "distinctiveness": draft_dist,
+        "semantic_distance": round(dist_sem, 4),
+        "style_distance": round(dist_sty, 4),
+        "voice_match": draft_voice,
+    },
+    "directions": records,
+    "headline": {
+        "directions_generated": len(directions),
+        "beat_the_draft": more_distinct,
+        "best_delta": max((r["delta_distinctiveness"] for r in records), default=None),
+    },
+})
+runlog.announce(path)

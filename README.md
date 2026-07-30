@@ -1,193 +1,219 @@
 # Stilliu
 
-**A creative writing partner that fights AI sameness.**
+**Every AI writing tool can change your voice. None of them can tell you whether it worked.**
+
+Stilliu is an instrument panel for prose distinctiveness. It measures how close your draft sits to what a generic AI would write for the same content, generates rewrites that deliberately travel away from that centre, and attaches a **score delta to every single rewrite** — so you can see that the intervention moved the measurement, not just that something changed.
+
+Built for the **IBM AI Builders Challenge — July 2026: "Reimagine Creative Industries with AI."**
 
 ---
 
-## Problem Statement
+## Problem
 
-When writers use AI tools, their individual work gets better — but everyone's work starts to sound the same. This is not anecdotal: Doshi & Hauser (2024) and multiple 2026 arXiv papers document measurable convergence in AI-assisted writing toward a statistical mean. Individual quality rises; collective distinctiveness collapses.
+AI writing assistants make each individual writer better and every writer more alike. Doshi & Hauser (*Science Advances*, 2024) found generative AI raises individual creativity while measurably reducing the collective diversity of the resulting work. Padmakumar & He (ICLR 2024) showed feedback-tuned models reduce output diversity and increase inter-author similarity. Lu et al. (ICLR 2025) put a number on the gap: human-authored text scores 66.2% higher on their Creativity Index than LLM text, and RLHF *reduces* that index by around 30%.
 
-The problem is that existing AI writing tools have no mechanism to measure or resist this. They optimise for fluency and correctness, not for distinctiveness. Writers using them have no signal that their voice is eroding.
+Two things follow, and the second is the one nobody has addressed.
+
+**Existing generative tools have no measurement.** Sudowrite, Novelcrafter, Jasper, and the built-in style presets of the major chat assistants all expose rich style controls and report nothing back. Reviewers of preset systems independently report that outputs "all sounded fairly similar." A writer applying a style instruction has no signal about whether it did anything.
+
+**Existing measurement tools point the wrong way.** Hemingway, Grammarly, ProWritingAid, and Writer.com all score *conformity to a norm* — readability, correctness, house style. AutoCrit is the only widely-used comparative scorer and it measures proximity to genre convention, which its own reviewers call the cookie-cutter trap. Every one of them rewards you for sounding more like everyone else.
+
+So the writer is caught between tools that change their voice without measuring it and tools that measure the opposite of what matters.
 
 ---
 
 ## Solution
 
-**Stilliu** gives writers three things no existing tool provides:
+Stilliu measures **distance**, and treats distinctiveness as the target rather than the deviation.
 
-1. **A real, computable measurement** of how generic their draft is — a genuine cosine distance between their draft's embedding and what a default AI would write for the same content, blended with topic-independent stylometric features so the score reflects *how* the text is written, not just *what* it is about.
+**1. A computable distinctiveness score.** Stilliu asks a current IBM Granite model to write the blandest possible version of your draft, then measures how far your prose sits from that anchor — blending semantic distance from Granite embeddings with a topic-independent stylometric distance across 12 measured features. The anchor is generated, not assumed, so the score is grounded in what an actual IBM model produces when told to be generic.
 
-2. **Three divergent directions** generated using distinct stylistic personas, each scored on three axes (Distinctiveness, Voice Match, On-message) shown as deltas vs the draft — so the writer can see alternatives that are provably bolder, and understand exactly what was traded to get there.
+**2. Rewrites with the delta attached.** Pick from 18 style presets across 5 named groups, or write your own brief. Each direction returns three axis scores *and* the change versus your draft, so a rewrite that claims to be bolder has to prove it. Every axis reads the same way: **high is good**, everywhere.
 
-3. **Writer controls** — format, length, tone, audience, persona selection, custom directions, voice anchoring strength, and a fact-preservation guard that flags and regenerates directions that invent claims not present in the source.
+**3. Controls that name what they change.** 17 writer controls — format, length, tone, audience, POV, tense, vocabulary, rhythm, opening, divergence distance, banned words, phrases to keep, voice-anchor strength, and a fact-preservation guard that flags invented claims and regenerates the direction that produced them.
 
-The writer stays the author. Stilliu makes the invisible visible — and gives them a path to something better.
+The writer stays the author. Stilliu makes the invisible measurable, then gives them somewhere to go.
 
 ---
 
-## AI Approach & Architecture
+## What makes the measurement defensible
 
-### The Core Measurement
+Four decisions carry the product. Each exists because the obvious approach fails in a specific, checkable way.
 
-Stilliu measures **distance**, not abstract quality. Every number the user sees is derived from real cosine distances between embedding vectors — defensible, reproducible, and falsifiable.
+### Stylometry, because embeddings measure topic, not voice
 
-**Why stylometry?** Sentence embeddings capture *what* a text is about, not *how* it is written. Two rewrites of the same subject sit close together in embedding space even when their prose styles are wildly different. A bold stylistic rewrite can score as "generic" on pure embedding distance alone. Stilliu blends semantic distance (40%) with topic-independent stylometric distance (60%) — sentence rhythm, lexical variety, function-word mix, punctuation profile — to separate style distinctiveness from topic distance.
+Sentence embeddings encode *what* a text is about. Two rewrites of the same subject sit close together in embedding space even when their prose is wildly different, so a bold stylistic rewrite scores as "generic" on embedding distance alone. This was a real, shipped defect: same-subject rewrites scored ~90 generic regardless of style.
+
+Distinctiveness therefore blends **semantic distance (40%)** with **stylometric distance (60%)** across 12 topic-independent features: mean sentence length and its standard deviation, mean word length, type-token ratio, function-word ratio, rare-word ratio, long-word ratio, and a punctuation profile of comma, semicolon, dash, question, and exclamation density. Style carries the larger weight because style is the thing being claimed.
+
+This follows the content-controlled evaluation principle from **STEL** (Wegmann & Nguyen, EMNLP 2021) — style must be measured with topic held constant. It is also why Voice Match does not rest on an authorship encoder alone: encoders trained on same-author signal absorb topic alongside style, so Stilliu pairs embedding proximity with an explicit stylometric term instead.
+
+### The baseline is never the model being scored
+
+The anchor for distinctiveness must be independent of the model producing the rewrites. Otherwise the score means "distance from a colder version of myself," which is nothing.
+
+The registry enforces two rules when picking the baseline: never the same model id as the creative model, and prefer a **different provider family**. A Granite baseline against a Llama creative model gives an independent idea of what bland prose sounds like. Only when a region hosts a single usable model does Stilliu accept the collapse — and then it says so in the response rather than hiding it.
+
+This was also a shipped bug. `eu-gb` hosts no Granite instruct model, so a hardcoded Granite baseline silently fell back to the creative model and the hybrid claim quietly stopped being true. The scores still looked fine. They meant nothing. `tests/test_model_registry.py` exists to keep that from recurring.
+
+### Model ids resolve against the region, never hardcoded
+
+A hardcoded model id is a demo that works on one account and dies on another. On startup Stilliu asks watsonx what this account can actually call, then resolves each of the three roles against that list using an ordered preference chain. An explicitly configured id is always tried first, so an env override is honoured. If the region hosts none of the preferences, it takes what exists rather than refusing to start; if the catalogue query itself fails, every role falls back to its configured id. Withdrawn models are filtered out, because a withdrawn model is still listed and would give you an id that exists on paper and 404s in practice.
+
+The registry never imports the watsonx SDK, which is why its logic is fully testable without credentials.
+
+### Distinctiveness is not a quality score
+
+Stilliu deliberately does **not** ship a single overall "quality" number, and does not classify text as AI- or human-written. Detector-style verdicts carry roughly 10% false positives, are biased against non-native writers, and the resulting accusations are a reputational minefield. Stilliu reports distances on named axes and lets the writer decide what to do with them.
+
+---
+
+## The three axes
+
+| Axis | What it measures | 100 means | How it is computed |
+|---|---|---|---|
+| **Distinctiveness** | Distance from bland AI defaults | Maximally unlike generic AI prose | 40% semantic + 60% stylometric distance from a Granite-generated bland baseline |
+| **Voice Match** | Proximity to the author's own voice | Sounds exactly like the writer | 50% semantic proximity to a voice centroid + 50% style proximity to the samples |
+| **On-message** | Semantic faithfulness to the draft | Stayed true to the draft's meaning | Embedding proximity to the original draft |
+
+Distinctiveness and Voice Match report an absolute score **and a delta versus your draft**. In the UI each axis is a rail with the draft's score drawn as a ghost tick — the gap between the tick and the fill *is* the product claim, made visible per rewrite.
+
+On-message is the exception: it is reported against a fixed neutral midpoint rather than the draft, because a draft is trivially 100% on-message with itself and a draft-relative delta would carry no information.
+
+Every blend weight is a named constant in `app/services/scoring.py` (`DIST_STYLE_WEIGHT`, `VOICE_SEMANTIC_WEIGHT`, and so on), not an inline literal, because the ratios are the editorial argument the file exists to make. The semantic calibration anchors come from a live probe against Granite embeddings (`calibrate.py`) rather than from intuition.
+
+## Measurement flow
 
 ```
 Draft text
     │
     ├─► Granite Embedding ──► draft_vector
     │                                        ┐
-    ├─► Stylometry ──────────► style_vector  ├─► Distinctiveness (0–100, high=bold)
+    ├─► Stylometry (12 features) ► style_vec ├─► Distinctiveness (0–100, high = bold)
     │                                        ┘
-    └─► Granite Baseline ──► baseline_text
-              │
-              ├─► Granite Embedding ──► baseline_vector
-              └─► Stylometry ────────► baseline_style_vector
+    └─► Granite Baseline ──► baseline_text ──► embedding + stylometry
+                                               (the independent anchor)
 
 Voice samples (optional)
-    └─► Granite Embedding ──► voice_centroid
-    └─► Stylometry ────────► voice_style_vectors ──► Voice Match (0–100, high=yours)
+    └─► Granite Embedding ──► voice_centroid ─┐
+    └─► Stylometry ──────────► style_vectors ─┴─► Voice Match (0–100, high = yours)
 
-Direction text
-    └─► Granite Embedding ──► direction_vector ──► On-message (0–100, high=faithful)
+Each direction
+    └─► Granite Embedding ──► direction_vector ──► On-message (0–100, high = faithful)
+    └─► Faithfulness guard ──► unsupported claims ──► refine loop if it fails
 ```
 
-### Three Axes — HIGH = GOOD everywhere
+## The refine loop
 
-| Axis | What it measures | 100 means |
+A direction that fails its thresholds is regenerated with corrective feedback before the writer ever sees it. Two triggers, both in `app/main.py` as named constants: distinctiveness below 30, or — when fact preservation is on — faithfulness below 60. The response marks refined directions so the behaviour is visible rather than silent.
+
+The faithfulness guard extracts checkable claims from generated text (numbers, percentages, years, quoted strings, multi-word proper nouns) and flags any that are not grounded in the source. This exists because the pre-hardening build invented a *Wall Street Journal* interview, cities, and statistics that appeared nowhere in the draft.
+
+## Model roles
+
+Three roles, each resolved against what the region actually hosts:
+
+| Role | Preference | Why |
 |---|---|---|
-| **Distinctiveness** | Distance from bland AI defaults (semantic + stylometric) | Maximally bold, unlike generic AI prose |
-| **Voice Match** | Proximity to the author's voice fingerprint | Sounds exactly like the writer |
-| **On-message** | Semantic faithfulness to the original draft | Stayed true to the draft's meaning |
+| Creative rewrites | `meta-llama/llama-3-3-70b-instruct` | Instruction-following under a persona constraint is what this role needs |
+| Bland baseline | `ibm/granite-4-h-small` → `granite-3-3-8b-instruct` → older Granite | Current Granite generation, and a different provider family from the creative model so the anchor stays independent |
+| All measurement | `ibm/granite-embedding-278m-multilingual` → `granite-embedding-107m` → slate retrievers | Multilingual Granite first; slate is present in nearly every region |
 
-Each direction shows its absolute score and its **delta vs the draft** — so the writer sees not just a number but whether the direction improved on what they started with.
+`GET /health` reports the ids that were actually resolved, not the ones requested — the UI badges read from it, so they can never claim a model that isn't loaded.
 
-### Faithfulness Guard
-
-A regex-based claim extractor identifies checkable facts in each direction (numbers, percentages, years, quoted strings, multi-word proper nouns). Any claim not grounded in the source material is flagged as unsupported. Directions that fail the faithfulness threshold are automatically regenerated with corrective feedback before display.
-
-### Hybrid Model Strategy
-
-| Role | Model |
-|---|---|
-| Creative persona rewrites | `meta-llama/llama-3-3-70b-instruct` (best instruction-following in eu-gb) |
-| Bland baseline generation | `ibm/granite-3-3-8b-instruct` (falls back to Llama if unavailable in-region) |
-| All embedding / distance measurement | `ibm/granite-embedding-278m-multilingual` |
-
-### Divergent Generation
-
-Three stylistic personas with independent constraint axes, generated **in parallel** via `ThreadPoolExecutor`:
-
-- **Sparse Minimalist** — compression, declarative sentences, silence
-- **The Arguer** — bold claim, step-by-step case, refutes objection
-- **Sensory-Led** — concrete physical detail, grounds abstraction in scene
-
-Writer controls shape every direction: format (prose/bullets/punchy/longform), length, tone, audience, and a voice-anchor clause built from verbatim excerpts of the writer's own samples. A **refine loop** regenerates any direction that scores below the distinctiveness threshold or fails the faithfulness guard, with targeted corrective feedback.
-
-### Stack
-
-| Layer | Technology |
-|---|---|
-| Embeddings | `ibm/granite-embedding-278m-multilingual` via watsonx.ai |
-| Generation | `meta-llama/llama-3-3-70b-instruct` + `ibm/granite-3-3-8b-instruct` via watsonx.ai (eu-gb) |
-| Backend | Python 3.10 · FastAPI · uvicorn |
-| Frontend | React 18 · Vite · TypeScript |
-| Deployment | Single-machine, self-contained — no database, no auth |
-
-### Architecture
+## Architecture
 
 ```
-Browser (React + Vite)
+Browser (React 18 + Vite + TypeScript)
     │
-    ├─ POST /api/score    ── Fast path: draft scores only (~8s warm)
-    └─ POST /api/analyze  ── Full path: scores + directions + refine loop (~25s warm)
+    ├─ GET  /health                 resolved model ids, demo-mode flag
+    ├─ GET  /api/styles             the 18-preset library, grouped
+    ├─ POST /api/score              fast path: draft scores only
+    ├─ POST /api/analyze            full path: scores + all directions + refine loop
+    ├─ POST /api/direction          regenerate one direction (granular apply)
+    └─ POST /api/fingerprint/validate   voice-sample check before committing
                 │
-         FastAPI (uvicorn)
+         FastAPI (uvicorn) — ThreadPoolExecutor for parallel generation
                 │
-    ┌───────────┼───────────────────────────────────┐
-    │  embeddings.py  │  generation.py  │  scoring.py  │
-    │  stylometry.py  │  guardrails.py  │  fingerprint.py │
-    └───────────┼───────────────────────────────────┘
+    ┌───────────┴──────────────────────────────────────────────┐
+    │  embeddings.py   generation.py   scoring.py   styles.py   │
+    │  stylometry.py   guardrails.py   fingerprint.py           │
+    │  model_registry.py   textutil.py                          │
+    └───────────┬──────────────────────────────────────────────┘
                 │
-         watsonx.ai eu-gb
-         ├── granite-embedding-278m-multilingual
-         ├── granite-3-3-8b-instruct  (baseline)
-         └── llama-3-3-70b-instruct   (creative directions)
+         watsonx.ai (region-resolved)
+         ├── granite-embedding-278m-multilingual   all distance measurement
+         ├── granite-4-h-small                     bland baseline anchor
+         └── llama-3-3-70b-instruct                creative directions
 ```
 
-**Demo safety**: `DEMO_MODE=true` serves pre-computed fixture responses — the full application works with zero API calls, zero network dependency.
+Directions are generated in parallel via `ThreadPoolExecutor`, so three rewrites cost roughly one rewrite in wall-clock time.
+
+**Demo safety:** with no credentials the backend starts in demo mode and serves fixture responses. Every screen stays clickable with zero API calls and zero network dependency.
 
 ---
 
-## Challenge Theme
+## The style library
 
-**IBM AI Builders Challenge — July 2026: "Reimagine Creative Industries with AI"**
+18 presets across 5 groups. Three design rules, each with a reason:
 
-Stilliu directly addresses all four challenge questions:
-- *How can AI enhance creativity?* — By making the invisible visible: writers can now see and measure the cost of AI homogenisation, and act on it.
-- *Help people create faster?* — Three divergent directions generated in ~25s that would take hours of deliberate experimentation to reach manually.
-- *Unlock new creative experiences?* — Voice fingerprinting is a genuinely new capability: a personal creative mirror that tells you whether your draft still sounds like you.
-- *New forms of expression?* — The persona system produces text that crosses stylistic registers in controlled, reproducible ways.
+- **Named for a stance, never an author.** "Sparse Minimalist," not "write like Hemingway." Impersonation is both a legal problem and a cookie-cutter one.
+- **Grouped with visible headers.** Naming the *dimensions* of a design space prevents fixation on the first option (Luminate, CHI 2024).
+- **Every preset carries an `avoid` ban list.** Positive-only style prompts drift back to model defaults; the instruction has to say what not to do.
+
+| Group | Presets |
+|---|---|
+| **Compression** | Sparse Minimalist · Telegraphic · Long-Breath Cumulative · Plainspoken Reportorial |
+| **Sensory & Figurative** | Sensory-Led · Metaphor-Dense · Object-Anchored · Synaesthetic / Estranged |
+| **Argument & Rhetoric** | The Arguer · Socratic Interrogator · Aphorist · Steelman-then-Break |
+| **Voice & Persona** | Confiding Second Person · Deadpan Ironist · Unreliable Close-Third · Bureaucratic Uncanny |
+| **Counter-LLM** | Anti-Cadence · Rough Draft Energy |
+
+Divergence is exposed as three named notches rather than a bare slider, because each notch can state its expected effect: **nudge** (word choice and rhythm only), **recast** (re-form freely, keep every point), **break** (discard the original structure entirely). Up to 6 directions per request, all genuinely in flight at once — the thread pool is sized to the selection, so the last two are not silently queued behind the first four. The cap bounds both latency and token spend.
+
+The `Counter-LLM` group and the `avoid_ai_cadence` control target the measured markers of machine prose: tricolons, "not just X but Y," em-dash asides, summarising closers, and the known over-represented lexicon.
 
 ---
 
-## Running Locally
+## Running it
 
-Two supported paths. **Docker** is one command and works identically on every OS — use it if you just want the demo running. **Native** is better if you're developing, since you get your own debugger and a faster edit loop.
+Two paths. **Docker** is one command and behaves identically everywhere. **Native** gives you a faster edit loop and your own debugger.
 
-### Credentials (both paths)
+### Credentials
 
 Copy `backend/.env.example` to `backend/.env` and fill in your watsonx API key and project ID.
 
-**Stilliu runs without credentials.** With no `.env`, the backend starts in demo mode and serves fixtures, so every screen is still clickable. You only need an IBM account to see live generation.
+**Stilliu runs without credentials.** A fresh clone has no `.env` — it is gitignored — so `config.py` defaults the credentials to empty and turns demo mode on by itself, serving fixtures instead of calling watsonx. Every screen stays clickable. You only need an IBM account to see live generation.
 
-> Never commit `backend/.env`. It's gitignored, and `backend/.dockerignore` keeps it out of image layers too — Compose injects it at runtime instead.
+That is deliberate: requiring the credentials would mean a clone dies at startup with a validation error before demo mode could be considered, which is the worst possible way for someone evaluating the project to meet it.
 
----
+Model ids in `.env` are *requests*, not requirements — the registry resolves them against what your region actually hosts and logs any substitution.
 
-### Option A — Docker (any OS)
+> `backend/.env` is gitignored, and `backend/.dockerignore` keeps it out of image layers; Compose injects it at runtime instead.
 
-**Prerequisite:** Docker Desktop (Windows/macOS) or Docker Engine + Compose v2 (Linux).
+### Docker
 
 ```bash
 docker compose up --build
 ```
 
-Frontend on <http://localhost:5173>, backend on <http://localhost:8000> (API docs at `/docs`). Both directories are bind-mounted, so edits on your machine hot-reload inside the containers.
-
-```bash
-docker compose down          # stop
-docker compose up --build -d # rebuild and run detached
-docker compose logs -f backend
-```
-
-Run the tests inside the container:
+Frontend on <http://localhost:5173>, backend on <http://localhost:8000> (API docs at `/docs`). Both directories are bind-mounted, so edits hot-reload inside the containers.
 
 ```bash
 docker compose exec backend python -m pytest tests/ -v
 docker compose exec backend python selfcheck.py
 ```
 
-> **Older Compose:** the `env_file: required: false` key needs Compose v2.24+. On older versions, `touch backend/.env` to create an empty file and the stack will come up in demo mode.
+### Native
 
----
+Prerequisites: Python 3.10+, Node 18+. Two terminals.
 
-### Option B — Native
-
-**Prerequisites:** Python 3.10+, Node 18+.
-
-Two terminals. Backend first.
-
-<details open>
-<summary><b>Windows (PowerShell)</b></summary>
-
-```powershell
+```bash
 # Terminal 1 — backend
 cd backend
 python -m venv .venv
-.venv\Scripts\Activate.ps1
+.venv\Scripts\Activate.ps1        # Windows PowerShell
+# source .venv/bin/activate       # macOS / Linux
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 
@@ -197,128 +223,179 @@ npm install
 npm run dev
 ```
 
-Batch shortcuts also exist: `.\start.bat` (live) and `.\start_demo.bat` (demo mode).
+Then open <http://localhost:5173>. The backend takes roughly 10 seconds to warm its SDK clients and resolve model ids on first start; this is logged.
 
-Two PowerShell gotchas worth knowing, because both have bitten this project:
-
-- Always prefix batch files with `.\` — `start.bat` alone won't resolve.
-- `&&` is **not** a statement separator in Windows PowerShell 5.1. Use `;` instead, or upgrade to PowerShell 7.
-- If activation is blocked, run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` in that terminal.
-
-</details>
-
-<details>
-<summary><b>macOS / Linux (bash or zsh)</b></summary>
-
-```bash
-# Terminal 1 — backend
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-
-# Terminal 2 — frontend
-cd frontend
-npm install
-npm run dev
-```
-
-For demo mode without credentials: `DEMO_MODE=true uvicorn app.main:app --reload --port 8000`.
-
-On Debian/Ubuntu you may need `sudo apt install python3-venv` first.
-
-</details>
-
-Then open <http://localhost:5173>. The backend takes roughly 8 seconds to warm its SDK clients on first start — that's expected and logged.
-
-### Tests
-
-```bash
-cd backend
-python -m pytest tests/ -v   # full suite
-python selfcheck.py          # deterministic math only — numpy, no network, no credentials
-```
-
-`selfcheck.py` validates stylometry, guardrails, and scoring with numpy alone. It needs no watsonx SDK and no network, so it's the fastest way to confirm a checkout is sound.
+Demo mode is automatic when credentials are absent. To force it on *with* valid credentials, set `DEMO_MODE=true` in the environment, or run `.\start_demo.bat` on Windows.
 
 ---
 
-### Troubleshooting
+## Verification
 
-**Scores show `NaN/100`, or the dials are labelled "Generic Score" / "Voice Distance".**
-You're running a stale Vite bundle against the current backend — the old JS reads response fields that no longer exist. Vite's dependency cache survives a plain restart, so clear it:
+Stilliu ships **136 tests** (111 test functions, of which several are parametrised), and the deterministic core is testable with no credentials and no network at all.
 
 ```bash
-# stop the dev server first (Ctrl+C)
-cd frontend
-rm -rf node_modules/.vite    # PowerShell: Remove-Item -Recurse -Force node_modules\.vite
-npm run dev
+cd backend
+python -m pytest tests/ -v   # 136 collected
+python selfcheck.py          # deterministic math only — numpy, no SDK, no network
 ```
 
-Then hard-reload the browser (Ctrl+Shift+R, or Cmd+Shift+R on macOS). If it persists, open DevTools → Network → tick "Disable cache" and reload once with DevTools open.
+| Suite | Collected | Covers |
+|---|---|---|
+| `test_styles.py` | 78 | The preset library, selection arithmetic, custom briefs, every divergence notch and narration control, the cleared-selection invariant |
+| `test_model_registry.py` | 25 | Region resolution, baseline independence, Granite preference order, withdrawn-model filtering |
+| `test_guardrails.py` | 12 | Claim extraction and the faithfulness guard |
+| `test_stylometry.py` | 11 | The 12 style features and the distance metric |
+| `test_scoring.py` | 10 | Multi-axis scoring, delta arithmetic, high-is-good direction |
 
-**Port already in use.** Something else holds 8000 or 5173.
-`netstat -ano | findstr :8000` on Windows, `lsof -i :8000` on macOS/Linux.
+`selfcheck.py` validates stylometry, guardrails, and scoring with numpy alone — the fastest way to confirm a checkout is sound.
 
-**Frontend loads but every API call fails.** The backend isn't up, or isn't on 8000. Check <http://localhost:8000/health> directly. Under Docker, confirm `VITE_API_TARGET=http://backend:8000` — inside the frontend container, `localhost` is the frontend itself.
+`model_registry.py` and the whole deterministic core deliberately never import the watsonx SDK, which is what makes credential-free testing possible.
 
-**Docker: esbuild or rollup "wrong binary" errors.** A host `node_modules` is shadowing the container's. The anonymous volume in `docker-compose.yml` prevents this; if you edited it, restore the `- /app/node_modules` line.
+### Live measurement scripts
 
-**Docker: edits don't hot-reload.** inotify events don't cross bind mounts on Windows and macOS. Compose sets `VITE_USE_POLLING=true` to handle this — verify it's still in the frontend service's environment.
+Two scripts make real watsonx calls and **persist their results** to `backend/results/` via `runlog.py`, so numbers survive the terminal that produced them.
 
-**The style picker is empty.** It's populated from `GET /api/styles`. Hit <http://localhost:8000/api/styles> directly; if that 404s, your backend predates the style library.
+```bash
+cd backend
+# venv active, real credentials in .env
 
+python calibrate.py           # → results/calibration-<utc>.json
+python validate_pipeline.py   # → results/validation-<utc>.json
+```
+
+**`calibrate.py`** embeds known bland-vs-distinctive text pairs and reports the raw cosine distances, then recommends values for `_DIST_SEM_FLOOR` and `_DIST_SEM_CEIL` — the two constants in `scoring.py` that define the distinctiveness scale — using those exact names, so the output is directly copy-pasteable. Run it when you change region, embedding model, or those constants. The record includes the region, the model ids, the embedding dimension, every pair distance, and the recommended constants — so "which run produced the numbers currently in `scoring.py`" stays answerable.
+
+**`validate_pipeline.py`** runs the whole pipeline end to end on a fixed draft and voice sample: warm clients, score the draft, build a voice centroid, generate directions in parallel, score each on all three axes, and run the faithfulness guard. Its headline is the claim the tool rests on — **how many directions actually beat the draft on distinctiveness** — recorded alongside per-direction deltas, the resolved model ids, and timings.
+
+Each run writes two files: `<kind>-<utc-timestamp>.json` as the permanent record, and `<kind>-latest.json` at a stable path. The timestamped copies are what make "did the score move after I changed the weights?" answerable, since the old numbers still exist. `backend/results/` is gitignored — these are live model outputs, and generated prose is not something to commit by reflex.
+
+To track results over time, run `validate_pipeline.py` before and after a scoring change and compare the two `headline` blocks:
+
+```bash
+python -c "import json,glob; [print(f, json.load(open(f))['headline']) for f in sorted(glob.glob('results/validation-*.json'))]"
+```
 
 ---
 
-## Project Structure
+## How IBM Bob Was Used
+
+IBM Bob was the primary development tool for the original build of Stilliu — the working proof of concept that established the product idea, the API surface, and the first version of every module in `backend/app/`.
+
+**Scaffolding and architecture.** Bob generated the project skeleton from a plain-English description: the FastAPI application, the Pydantic schemas in `models.py`, the settings layer in `config.py`, the service module split, and the React + Vite + TypeScript frontend with its component structure. The `services/` boundary — one module per responsibility, with `textutil.py` holding pure numpy helpers so the maths stays independently testable — came out of planning with Bob rather than from a later refactor.
+
+**The measurement engine.** The first implementations of `embeddings.py`, `generation.py`, `scoring.py`, and `fingerprint.py` were written with Bob, including the watsonx client wiring, the cached SDK clients, and the parallel `ThreadPoolExecutor` generation path.
+
+**Debugging live watsonx behaviour.** Bob was used to diagnose real failures against real API calls, not mocks: region model-availability mismatches, embedding truncation limits, and the SDK accessor names that move between versions.
+
+**Documentation.** Bob drafted the original README, the environment templates, and the run scripts.
+
+**Where Bob stopped.** The build credits ran out partway through the hardening pass. Everything after the proof of concept — the stylometry engine, the multi-axis rescoring, the model registry, the faithfulness guard, the style library, the UI rebuild, and the test suite — was built on top of Bob's foundation using Claude. This README says so because a submission that measures things should be honest about its own provenance.
+
+---
+
+## Challenge fit
+
+**Theme: Reimagine Creative Industries with AI.**
+
+*How can AI enhance creativity?* By measuring the cost of AI homogenisation and making it actionable. Stilliu is the only tool in this space that reports whether a style intervention actually moved the text.
+
+*Help people create faster?* Six divergent, scored directions in parallel, each with the delta attached — work that would take hours of deliberate manual experimentation to reach.
+
+*Unlock new creative experiences?* Voice fingerprinting gives a writer a personal reference point and answers a question no other tool answers: does this still sound like me?
+
+*New forms of expression?* The preset library crosses stylistic registers in controlled, reproducible ways, with a group specifically built to push against the measured markers of machine prose.
+
+**Where IBM technology sits.** Granite is load-bearing, not decorative. Granite embeddings compute every distance the product reports, and a Granite model generates the bland baseline that the entire distinctiveness axis is measured against. Remove Granite and there is no measurement — which is the whole product.
+
+---
+
+## Limitations
+
+Stated plainly, because a measurement tool that oversells itself is self-refuting.
+
+- **The distinctiveness scale is calibrated, not absolute.** The floor and ceiling constants come from a live probe (`calibrate.py`) on a small set of hand-picked text pairs. A score of 72 is meaningful relative to Stilliu's anchor; it is not a universal units-of-distinctiveness reading.
+- **Distinctiveness is measured against a generated baseline, not against a population corpus.** The anchor is what one current Granite model writes when told to be bland. Scoring against a large reference corpus of published prose is the natural next step and is not built.
+- **Voice Match needs samples to mean anything.** With no voice samples the axis is omitted rather than guessed. Two or three short samples is thin; the centroid gets meaningfully better with more.
+- **The faithfulness guard is regex-based.** It catches numbers, years, quoted strings, and multi-word proper nouns. It will not catch a fluent, plausible, entirely invented sentence that contains no checkable surface features.
+- **No authentication, no database, no multi-user state.** This is a single-machine demo by design. Do not deploy it as-is to a shared host.
+- **Stylometric features are English-tuned.** The function-word and common-word lists are English, so scores on other languages are not trustworthy even though the embedding model is multilingual.
+- **Latency is real.** Cold start is around 10 seconds to warm clients and resolve models; a full analyse with the refine loop takes roughly 25 seconds warm. Parallelism bounds it but does not hide it.
+
+---
+
+## Project structure
 
 ```
 stilliu/
 ├── backend/
+│   ├── Dockerfile
+│   ├── .env.example                Credential + model-id template, documented
 │   ├── app/
-│   │   ├── main.py             # FastAPI app, routes, lifespan warmup, refine loop
-│   │   ├── config.py           # Settings via pydantic-settings (hybrid model IDs)
-│   │   ├── models.py           # Pydantic schemas — AxisScores, WriterControls, etc.
-│   │   ├── fixtures/           # Pre-computed demo responses
+│   │   ├── main.py                 FastAPI app, 6 routes, lifespan warmup, refine loop
+│   │   ├── config.py               Settings; forces demo mode when credentials are absent
+│   │   ├── models.py               Pydantic schemas — AxisScores, WriterControls (17 controls)
+│   │   ├── fixtures/               Reference copy of the response shape (the live demo
+│   │   │                           path is hardcoded in main.py so it cannot drift)
 │   │   └── services/
-│   │       ├── embeddings.py   # Granite embedding client (cached)
-│   │       ├── generation.py   # Baseline (Granite) + persona directions (Llama)
-│   │       ├── scoring.py      # Multi-axis scoring — high=good everywhere
-│   │       ├── stylometry.py   # Topic-independent style feature vectors
-│   │       ├── guardrails.py   # Faithfulness / hallucination guard
-│   │       ├── fingerprint.py  # Voice centroid builder
-│   │       └── textutil.py     # Pure numpy helpers (cosine_distance, clamp, etc.)
-│   ├── tests/
-│   │   ├── conftest.py         # Demo-mode fixture, env setup
-│   │   ├── test_scoring.py     # Multi-axis scoring unit tests
-│   │   ├── test_stylometry.py  # Style feature + distance tests
-│   │   └── test_guardrails.py  # Faithfulness guard tests
-│   ├── selfcheck.py            # Offline numpy-only self-check script
-│   ├── start.bat               # Start backend (live mode)
-│   ├── start_demo.bat          # Start backend (demo mode)
+│   │       ├── model_registry.py   Region-aware model resolution; never imports the SDK
+│   │       ├── embeddings.py       Granite embedding client (cached)
+│   │       ├── generation.py       Baseline (Granite) + directions (Llama), parallel
+│   │       ├── scoring.py          Three axes, deltas, high-is-good everywhere
+│   │       ├── stylometry.py       12 topic-independent style features
+│   │       ├── styles.py           18 presets in 5 groups, each with an avoid list
+│   │       ├── guardrails.py       Claim extraction + faithfulness guard
+│   │       ├── fingerprint.py      Voice centroid builder
+│   │       └── textutil.py         Pure numpy helpers (cosine_distance, clamp)
+│   ├── tests/                      136 tests, no credentials required
+│   │   ├── test_styles.py          78   preset library + selection invariants
+│   │   ├── test_model_registry.py  25   region resolution + baseline independence
+│   │   ├── test_guardrails.py      12   faithfulness guard
+│   │   ├── test_stylometry.py      11   style features + distance
+│   │   └── test_scoring.py         10   multi-axis scoring + deltas
+│   ├── runlog.py                   Persists live-script results to results/
+│   ├── calibrate.py                Live calibration probe → results/calibration-*.json
+│   ├── validate_pipeline.py        Live end-to-end validation → results/validation-*.json
+│   ├── integration_test.py         API-level checks against a running server
+│   ├── selfcheck.py                Offline numpy-only self-check
+│   ├── start.bat / start_demo.bat  Windows shortcuts (live / demo mode)
 │   └── requirements.txt
 └── frontend/
-    ├── src/
-    │   ├── App.tsx              # Main layout, two-phase analyze flow, controls
-    │   ├── api/client.ts        # Typed API client (WriterControls, AxisScores, etc.)
-    │   ├── hooks/               # useVoiceFingerprint
-    │   └── components/
-    │       ├── ScoreDials.tsx   # Gauge dials — color by meaning, delta display
-    │       ├── DirectionCards.tsx  # Three-axis cards, faithfulness flags, refine badge
-    │       ├── ControlsPanel.tsx   # Writer controls (format, tone, personas, etc.)
-    │       └── VoiceOnboarding.tsx
-    └── package.json
+    ├── Dockerfile
+    ├── index.html · vite.config.ts · tsconfig.json · package.json
+    └── src/
+        ├── main.tsx                React entry point
+        ├── App.tsx                 One-viewport shell, tabs both sides, granular apply
+        ├── index.css               Class-based design system
+        ├── api/client.ts           Typed API client
+        ├── hooks/useVoiceFingerprint.ts
+        └── components/
+            ├── AxisMeter.tsx       Score rail with the draft drawn as a ghost tick
+            ├── ControlsPanel.tsx   5 control tabs with off-default counts
+            ├── DirectionPanel.tsx  Per-direction output, axis deltas, refine badge
+            └── VoiceOnboarding.tsx
 ```
 
 ---
 
-## Research Basis
+## Research basis
 
-- Doshi, A. R., & Hauser, O. P. (2024). Generative AI enhances individual creativity but reduces the collective diversity of novel content. *Science Advances.*
-- Multiple 2026 arXiv papers documenting AI-assisted writing homogenisation effects.
+- **Doshi & Hauser (2024)**, *Generative AI enhances individual creativity but reduces the collective diversity of novel content*, Science Advances — the homogenisation result the product exists to address.
+- **Lu et al. (ICLR 2025)**, *Creativity Index* (arXiv:2410.04265) — human text scores 66.2% higher than LLM text; RLHF reduces the index by ~30%.
+- **Padmakumar & He (ICLR 2024)** (arXiv:2309.05196) — feedback-tuned models reduce diversity and increase inter-author similarity.
+- **Wegmann & Nguyen (EMNLP 2021)**, *STEL* (arXiv:2109.04817) — content-controlled style evaluation; the basis for separating style from topic.
+- **Wegmann et al. (RepL4NLP 2022)**, *CISR* — same-author / different-conversation contrastive style representation.
+- **StyleDistance** (arXiv:2410.12757) — synthetic parallel examples for content-independent style embeddings.
+- **Johnson et al. (2023)**, *DSI*, Behavior Research Methods — semantic-distance creativity scoring; explains up to 72% of variance in human creativity ratings.
+- **Rivera-Soto et al. (EMNLP 2021)**, *Learning Universal Authorship Representations* (LUAR) — the standard authorship encoder. Stilliu deliberately does **not** use it as a voice-match metric: authorship encoders trained on same-author signal are known to absorb topic alongside style, which is the exact confound STEL and StyleDistance were built to control for. Voice Match therefore pairs embedding proximity with an explicit stylometric term rather than trusting an authorship embedding alone.
+- **Luminate** (CHI 2024, arXiv:2310.12953) — naming the dimensions of a design space prevents fixation; the justification for grouped presets.
+- **Agarwal, Naaman & Vashistha (CHI 2025)** — AI suggestions erase the cultural lexical-diversity gap (p=0.003 → p=0.75). Counter-evidence noted honestly: an ACL 2025 SRW paper found homogenisation *not* detectable via MTLD/Maas/MATTR, which is why Stilliu measures structural and stylometric distinctiveness rather than lexical diversity alone.
 
 ---
 
-*Built for IBM AI Builders Challenge 2026 — "Reimagine Creative Industries with AI"*
+## Licence
+
+MIT. See [LICENSE](LICENSE).
+
+---
+
+*Built for the IBM AI Builders Challenge 2026 — "Reimagine Creative Industries with AI."*

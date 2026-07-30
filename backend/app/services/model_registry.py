@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 #     wants a *small, cheap, low-temperature* model. It is also scored against,
 #     so a different family from the creative model makes the measurement
 #     independent rather than self-referential (see pick_baseline).
+#     granite-4-h-small leads: it is the current Granite generation, and the
+#     baseline is the one role where the model's *own* prose is measured, so
+#     running the newest Granite makes the anchor a fair representation of what
+#     a current IBM model actually writes when asked to be bland.
 #   embedding — multilingual Granite first; the slate retrievers are the
 #     long-standing fallback present in nearly every region.
 CREATIVE_PREFERENCES: tuple[str, ...] = (
@@ -38,11 +42,13 @@ CREATIVE_PREFERENCES: tuple[str, ...] = (
     "meta-llama/llama-3-405b-instruct",
     "mistralai/mistral-large",
     "mistralai/mistral-small-3-1-24b-instruct-2503",
+    "ibm/granite-4-h-small",
     "ibm/granite-3-3-8b-instruct",
     "ibm/granite-3-2-8b-instruct",
 )
 
 BASELINE_PREFERENCES: tuple[str, ...] = (
+    "ibm/granite-4-h-small",
     "ibm/granite-3-3-8b-instruct",
     "ibm/granite-3-2-8b-instruct",
     "ibm/granite-3-8b-instruct",

@@ -24,6 +24,11 @@ htmlcov/
 .coverage
 coverage.xml
 
+# Live measurement runs — real model output, written by calibrate.py and
+# validate_pipeline.py via runlog.py. Kept local: generated prose is not
+# something to commit by reflex. Quote the numbers in the README by hand.
+backend/results/
+
 # Node / Frontend
 node_modules/
 frontend/dist/

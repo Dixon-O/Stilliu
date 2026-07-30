@@ -14,8 +14,14 @@ Three axes, each 0–100 where 100 is the best possible outcome:
   On-Message       — semantic faithfulness to the original draft.
                      Pure embedding proximity; guards against hallucination drift.
 
-All three are returned as absolute scores AND as deltas vs the draft so the UI
-can show "this direction is +18 more distinctive than your draft."
+Distinctiveness and Voice Match are returned as absolute scores AND as deltas vs
+the draft, so the UI can show "this direction is +18 more distinctive than your
+draft." On-message is reported against a fixed neutral midpoint instead: the
+draft is trivially 100% on-message with itself, so a draft-relative delta would
+carry no information.
+
+All blend weights live in named constants below rather than inline, because the
+ratios are the editorial argument this file exists to make.
 """
 from __future__ import annotations
 import numpy as np
@@ -38,6 +44,32 @@ _MSG_SEM_CEIL  = 0.45    # heavily rewritten → score 0
 
 # Style distance is already in [0, 1] from stylometry.style_distance.
 # No additional calibration needed; multiply by 100 to get display units.
+
+# ── Blend weights ─────────────────────────────────────────────────────────────
+# Named, not inline, because these two ratios *are* the editorial argument the
+# product makes and anyone auditing the scores should find them in one place.
+#
+# Distinctiveness leans on style (60/40) because embeddings encode topic, not
+# voice: two rewrites of the same subject sit close together in embedding space
+# however different their prose. Weighting semantics higher would score a bold
+# stylistic rewrite as generic, which was the original shipped defect.
+#
+# Voice match splits evenly (50/50) because a voice is legitimately both — the
+# subjects someone returns to *and* the way they build a sentence. Neither half
+# earns the tiebreak.
+DIST_SEMANTIC_WEIGHT = 0.4
+DIST_STYLE_WEIGHT    = 0.6
+
+VOICE_SEMANTIC_WEIGHT = 0.5
+VOICE_STYLE_WEIGHT    = 0.5
+
+# On-message is deliberately unblended: it asks whether the meaning survived, and
+# that is a purely semantic question. Stylometry would only add noise.
+
+# The neutral midpoint the on-message delta is reported against. On-message has no
+# draft-relative reading — the draft is trivially 100% on-message with itself — so
+# the delta is stated against this midpoint instead.
+MSG_NEUTRAL_MIDPOINT = 50.0
 
 
 def _sem_to_display(raw: float, floor: float, ceil: float, high_is_far: bool) -> float:
@@ -69,7 +101,7 @@ def compute_distinctiveness(
     sem_score = _sem_to_display(raw_sem, _DIST_SEM_FLOOR, _DIST_SEM_CEIL, high_is_far=True)
     sty_score = clamp(raw_sty * 100.0, 0.0, 100.0)
 
-    score = round(0.4 * sem_score + 0.6 * sty_score, 1)
+    score = round(DIST_SEMANTIC_WEIGHT * sem_score + DIST_STYLE_WEIGHT * sty_score, 1)
     return score, raw_sem, raw_sty
 
 
@@ -89,7 +121,7 @@ def compute_voice_match(
     sem_score = _sem_to_display(raw_sem, _VOICE_SEM_FLOOR, _VOICE_SEM_CEIL, high_is_far=False)
     sty_score = clamp((1.0 - raw_sty) * 100.0, 0.0, 100.0)  # invert: close = good
 
-    score = round(0.5 * sem_score + 0.5 * sty_score, 1)
+    score = round(VOICE_SEMANTIC_WEIGHT * sem_score + VOICE_STYLE_WEIGHT * sty_score, 1)
     return score, raw_sem, raw_sty
 
 
@@ -124,8 +156,8 @@ def score_axes(
     Returned dict keys:
       distinctiveness, voice_match, on_message          — direction scores (0-100)
       draft_distinctiveness, draft_voice_match           — draft baselines
-      delta_distinctiveness, delta_voice_match,
-      delta_on_message                                   — direction − draft
+      delta_distinctiveness, delta_voice_match           — direction − draft
+      delta_on_message                                   — direction − neutral midpoint
       raw_*                                              — raw distances for debugging
     """
     dir_dist,  dir_dist_sem,  dir_dist_sty  = compute_distinctiveness(
@@ -151,7 +183,8 @@ def score_axes(
         # Deltas — positive means the direction improved on the draft
         "delta_distinctiveness": round(dir_dist  - dft_dist,  1),
         "delta_voice_match":     round(dir_voice - dft_voice, 1),
-        "delta_on_message":      round(dir_msg   - 50.0,      1),  # 50 = neutral midpoint
+        # Against a fixed midpoint, not the draft — see MSG_NEUTRAL_MIDPOINT.
+        "delta_on_message":      round(dir_msg - MSG_NEUTRAL_MIDPOINT, 1),
         # Raw distances for debugging / calibration
         "raw_dist_sem":          round(dir_dist_sem,  4),
         "raw_dist_sty":          round(dir_dist_sty,  4),

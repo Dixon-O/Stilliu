@@ -98,6 +98,25 @@ def test_baseline_honours_a_configured_id_from_another_family():
     assert chosen.model_id == CONFIGURED_BASELINE
 
 
+def test_baseline_prefers_the_current_granite_generation():
+    """
+    granite-4-h-small leads BASELINE_PREFERENCES. The baseline is the one role
+    whose own prose gets measured, so the anchor should be what a *current* IBM
+    model writes when asked to be bland — not a generation-old one.
+    """
+    available = EU_GB + ["ibm/granite-4-h-small", "ibm/granite-3-3-8b-instruct"]
+    chosen = R.pick_baseline(available, CONFIGURED_CREATIVE, "")
+    assert chosen.model_id == "ibm/granite-4-h-small"
+    assert R.family(chosen.model_id) != R.family(CONFIGURED_CREATIVE)
+
+
+def test_baseline_falls_back_to_granite_3_when_4_is_absent():
+    """A region without Granite 4 must still get a Granite anchor, not a Llama one."""
+    available = EU_GB + ["ibm/granite-3-3-8b-instruct"]
+    chosen = R.pick_baseline(available, CONFIGURED_CREATIVE, "")
+    assert chosen.model_id == "ibm/granite-3-3-8b-instruct"
+
+
 def test_baseline_shares_the_creative_model_only_as_a_last_resort():
     single_family = ["meta-llama/llama-3-3-70b-instruct", "meta-llama/llama-3-2-3b-instruct"]
     chosen = R.pick_baseline(single_family, CONFIGURED_CREATIVE, CONFIGURED_BASELINE)

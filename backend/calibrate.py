@@ -5,7 +5,11 @@ Run from stilliu/backend/ with the venv active:
   python calibrate.py
 
 Prints raw cosine distances between known generic vs distinctive text pairs
-so we can set GENERIC_DIST_FLOOR and GENERIC_DIST_CEIL in scoring.py correctly.
+so we can set _DIST_SEM_FLOOR and _DIST_SEM_CEIL in scoring.py correctly.
+
+The run is also written to results/calibration-<timestamp>.json (see runlog.py):
+these two constants define the entire distinctiveness scale, so the measurements
+behind whatever is currently in scoring.py should stay recoverable.
 """
 import sys
 import os
@@ -21,6 +25,7 @@ os.environ.setdefault("GENERATION_MODEL_ID", "meta-llama/llama-3-3-70b-instruct"
 from app.config import get_settings
 get_settings.cache_clear()
 
+import runlog
 from ibm_watsonx_ai import APIClient, Credentials
 from ibm_watsonx_ai.foundation_models import Embeddings
 from ibm_watsonx_ai.foundation_models import ModelInference
@@ -151,6 +156,46 @@ print("(This is the real-world range we need to normalise around)")
 print()
 print("=" * 55)
 print("RECOMMENDED scoring.py constants:")
-print(f"  GENERIC_DIST_FLOOR = {min(d_bb, d_dd) + 0.01:.3f}  (below this = very generic)")
-print(f"  GENERIC_DIST_CEIL  = {max(d_bd1, d_bd2, d_bd3) - 0.01:.3f}  (above this = very distinctive)")
+floor = min(d_bb, d_dd) + 0.01
+ceil = max(d_bd1, d_bd2, d_bd3) - 0.01
+# Names match the real constants in app/services/scoring.py so this output is
+# directly copy-pasteable. They were once GENERIC_DIST_* here and _DIST_SEM_*
+# there, which quietly made the recommendation useless.
+print(f"  _DIST_SEM_FLOOR = {floor:.3f}   # below this = very generic")
+print(f"  _DIST_SEM_CEIL  = {ceil:.3f}   # above this = very distinctive")
 print("=" * 55)
+
+# Persist it. These constants are the calibration the whole distinctiveness axis
+# rests on, so "which run produced the numbers currently in scoring.py" needs to
+# be answerable months later.
+path = runlog.save("calibration", {
+    "region": settings.watsonx_url,
+    "models": {
+        "embedding": settings.embedding_model_id,
+        "generation": settings.generation_model_id,
+    },
+    "embedding_dim": len(list(vecs.values())[0]),
+    "same_style_pairs": {
+        "bland_vs_bland": d_bb,
+        "distinct_vs_distinct": d_dd,
+    },
+    "cross_style_pairs": {
+        "bland_1_vs_distinct_1": d_bd1,
+        "bland_2_vs_distinct_2": d_bd2,
+        "clearly_generic_vs_distinct_1": d_bd3,
+    },
+    "mixed_medium": {
+        "bland_vs_mixed": d_bm,
+        "distinct_vs_mixed": d_dm,
+    },
+    "live_baseline_probe": {
+        "draft": sample_draft,
+        "baseline_text": baseline_text,
+        "distance": live_dist,
+    },
+    "recommended_constants": {
+        "_DIST_SEM_FLOOR": round(floor, 3),
+        "_DIST_SEM_CEIL": round(ceil, 3),
+    },
+})
+runlog.announce(path)

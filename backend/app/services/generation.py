@@ -506,7 +506,12 @@ def generate_divergent_directions(
 
     results_map: dict[str, dict] = {}
 
-    with ThreadPoolExecutor(max_workers=min(4, len(personas))) as pool:
+    # One worker per selected style, so all of them are genuinely in flight at
+    # once. MAX_SELECTED_STYLES already bounds this, and these threads spend
+    # their whole life blocked on a network call, so the pool costs nothing.
+    # A lower cap would silently queue the tail: with 6 styles and 4 workers the
+    # last two waited a full generation, and the "parallel" claim stopped holding.
+    with ThreadPoolExecutor(max_workers=min(MAX_SELECTED_STYLES, len(personas))) as pool:
         futures = {
             pool.submit(generate_single_direction, draft, persona, voice_samples, controls): persona
             for persona in personas

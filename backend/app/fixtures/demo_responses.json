@@ -5,7 +5,7 @@
     "demo_mode": true,
     "embed_model": "ibm/granite-embedding-278m-multilingual",
     "gen_model": "meta-llama/llama-3-3-70b-instruct",
-    "baseline_model": "ibm/granite-3-3-8b-instruct"
+    "baseline_model": "ibm/granite-4-h-small"
   },
   "analyze": {
     "draft_scores": {

@@ -1,13 +1,10 @@
 @echo off
 cd /d "%~dp0"
 REM ── DEMO MODE ────────────────────────────────────────────────────────────────
-REM Serves pre-computed fixtures — no real API calls, no network. The placeholder
-REM credentials below only satisfy config validation; they are NOT real secrets.
-set WATSONX_API_KEY=demo-placeholder-not-a-real-key
-set WATSONX_PROJECT_ID=demo-placeholder-not-a-real-project
-set WATSONX_URL=https://eu-gb.ml.cloud.ibm.com
-set EMBEDDING_MODEL_ID=ibm/granite-embedding-278m-multilingual
-set GENERATION_MODEL_ID=meta-llama/llama-3-3-70b-instruct
+REM Serves pre-computed fixtures — no real API calls, no network, no credentials.
+REM Placeholder keys used to be set here purely to satisfy config validation;
+REM config.py now defaults them to empty and turns demo mode on by itself when
+REM they are absent, so there is nothing to fake.
 set DEMO_MODE=true
 set SCORE_TIMEOUT=45
 set ANALYZE_TIMEOUT=120
