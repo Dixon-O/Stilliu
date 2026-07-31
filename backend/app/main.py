@@ -397,7 +397,7 @@ async def score_only(req: ScoreOnlyRequest):
             })
             return ScoreOnlyResponse(
                 draft_scores=draft_scores,
-                baseline_preview=ctx.baseline_text[:160].strip(),
+                baseline_preview=ctx.baseline_text.strip(),
                 demo_mode=False,
             )
 
@@ -450,7 +450,7 @@ async def analyze(req: AnalyzeRequest):
             return AnalyzeResponse(
                 draft_scores=draft_scores,
                 directions=direction_cards,
-                baseline_preview=ctx.baseline_text[:160].strip(),
+                baseline_preview=ctx.baseline_text.strip(),
                 demo_mode=False,
             )
 
@@ -510,7 +510,7 @@ async def direction(req: DirectionRequest):
             return DirectionResponse(
                 direction=card,
                 draft_scores=draft_scores,
-                baseline_preview=ctx.baseline_text[:160].strip(),
+                baseline_preview=ctx.baseline_text.strip(),
                 demo_mode=False,
             )
 

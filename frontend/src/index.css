@@ -187,19 +187,12 @@ body {
   gap: 10px;
   min-width: 0;
 }
+/* Holds the logo. No gradient or background of its own — the mark is line art
+   with its own ink, so a fill behind it would only fight the strokes. */
 .brand__mark {
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
   display: grid;
   place-items: center;
   flex: none;
-  background: linear-gradient(135deg, var(--axis-dist), var(--axis-voice) 55%, var(--axis-onmsg));
-  color: var(--on-accent);
-  font-family: var(--mono);
-  font-size: 15px;
-  font-weight: 800;
-  box-shadow: var(--shadow);
 }
 .brand__text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
 
@@ -596,6 +589,57 @@ input[type="range"] {
   font-size: 10.5px;
   color: var(--ink);
   word-break: break-all;
+}
+
+/* ── Baseline anchor ───────────────────────────────────────────────────────
+   The bland text every distinctiveness score is measured against. Collapsed by
+   default so it does not compete with the rails, but fully readable and
+   selectable when opened — a measurement you cannot inspect is a claim, not a
+   measurement.                                                                */
+
+.anchor {
+  border-top: 1px solid var(--rule);
+  margin-top: 2px;
+  padding-top: 8px;
+}
+
+.anchor__summary {
+  font-size: 11px;
+  color: var(--ink-3);
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+.anchor__summary::-webkit-details-marker { display: none; }
+.anchor__summary::before {
+  content: '▸';
+  font-size: 9px;
+  transition: transform 0.12s;
+}
+.anchor[open] .anchor__summary::before { transform: rotate(90deg); }
+.anchor__summary:hover { color: var(--ink-2); }
+
+.anchor__body { display: flex; flex-direction: column; gap: 8px; padding: 9px 0 2px; }
+.anchor__note { font-size: 10.5px; line-height: 1.5; color: var(--ink-3); }
+
+/* Serif, because it is prose being judged — and selectable, because the whole
+   point is that the reader can check it. */
+.anchor__text {
+  font-family: var(--serif);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  user-select: text;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 9px 10px;
+  max-height: 190px;
+  overflow-y: auto;
 }
 
 /* ── Style picker ──────────────────────────────────────────────────────────*/

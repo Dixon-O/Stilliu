@@ -58,6 +58,61 @@ export const DEFAULT_CONTROLS: WriterControls = {
   keep_phrases: '',
 }
 
+/**
+ * The value of each control that adds *no instruction* to the prompt.
+ *
+ * Deliberately not `DEFAULT_CONTROLS`. Two controls ship switched on
+ * (`preserve_facts`) or on a named setting (`divergence: 'recast'`), so
+ * "differs from default" and "is constraining the model" are different
+ * questions — and counting the first while labelling it as the second is what
+ * made the tab badge read backwards: switching a guard *off* raised the number.
+ *
+ * A control is *active* when its value differs from the neutral below. That is
+ * monotonic in the way a reader expects: every box you tick adds one, every box
+ * you clear removes one, and an untouched tab shows nothing.
+ *
+ * `personas` is absent on purpose — the presets have their own count.
+ */
+export const NEUTRAL_CONTROLS: Omit<WriterControls, 'personas'> = {
+  preserve_facts: false,
+  fmt: 'prose',
+  length: 'match',
+  tone: '',
+  audience: '',
+  custom_persona: '',
+  divergence: 'recast',
+  avoid_ai_cadence: false,
+  voice_strength: 0.5,
+  pov: 'keep',
+  tense: 'keep',
+  vocabulary: 'standard',
+  rhythm: 'keep',
+  opening: 'keep',
+  banned_words: '',
+  keep_phrases: '',
+}
+
+/**
+ * How many of `keys` are actively instructing the model.
+ *
+ * Text fields count only when they hold something after trimming, so stray
+ * whitespace never shows up as a constraint.
+ */
+export function countActive(
+  controls: WriterControls,
+  keys: (keyof WriterControls)[],
+): number {
+  return keys.filter((k) => {
+    if (k === 'personas') return false
+    const neutral = NEUTRAL_CONTROLS[k as keyof typeof NEUTRAL_CONTROLS]
+    const value = controls[k]
+    if (typeof value === 'string' && typeof neutral === 'string') {
+      return value.trim() !== neutral.trim()
+    }
+    return value !== neutral
+  }).length
+}
+
 /** Named notches beat a bare slider — each one states what it will do. */
 export const DIVERGENCE_NOTCHES: {
   value: Divergence

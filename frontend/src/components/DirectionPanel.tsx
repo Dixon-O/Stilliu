@@ -32,8 +32,12 @@ interface Props {
   onGenerate: (style: string) => void
   /** The draft's own scores, pinned to each rail for comparison. */
   draftScores: DraftScores | null
-  /** True while any request is in flight — keeps the writer from stacking calls. */
-  busy: boolean
+  /**
+   * True only while a *whole-workspace* request is running (scoring the draft, or
+   * writing the full batch). A single card being rewritten does not set this —
+   * cards are independent, so one spinner must not disable the others.
+   */
+  batchBusy: boolean
   /** Shown above the grid until a voice fingerprint exists. */
   voiceActive: boolean
   onOpenVoice: () => void
@@ -43,7 +47,7 @@ export default function DirectionPanel({
   slots,
   onGenerate,
   draftScores,
-  busy,
+  batchBusy,
   voiceActive,
   onOpenVoice,
 }: Props) {
@@ -103,7 +107,7 @@ export default function DirectionPanel({
               key={slot.style}
               slot={slot}
               draftScores={draftScores}
-              busy={busy}
+              batchBusy={batchBusy}
               onGenerate={onGenerate}
             />
           ))}
@@ -118,12 +122,12 @@ export default function DirectionPanel({
 function Card({
   slot,
   draftScores,
-  busy,
+  batchBusy,
   onGenerate,
 }: {
   slot: DirectionSlot
   draftScores: DraftScores | null
-  busy: boolean
+  batchBusy: boolean
   onGenerate: (style: string) => void
 }) {
   const [copied, setCopied] = useState(false)
@@ -137,6 +141,9 @@ function Card({
     })
   }
 
+  // This card's actions are gated by the batch lock and by its own request, so a
+  // sibling card being rewritten leaves this one fully usable.
+  const locked = batchBusy || slot.status === 'loading'
   const flagged = !!card && card.faithfulness < 80
   const delta = card?.deltas.distinctiveness ?? null
 
@@ -186,7 +193,7 @@ function Card({
           <button
             className="btn btn--sm"
             type="button"
-            disabled={busy}
+            disabled={locked}
             onClick={() => onGenerate(slot.style)}
           >
             Try again
@@ -203,7 +210,7 @@ function Card({
           <button
             className="btn btn--primary btn--sm"
             type="button"
-            disabled={busy}
+            disabled={locked}
             onClick={() => onGenerate(slot.style)}
           >
             Write this direction
@@ -288,7 +295,7 @@ function Card({
             <button
               className="btn btn--sm"
               type="button"
-              disabled={busy}
+              disabled={locked}
               onClick={() => onGenerate(slot.style)}
               title="One model call — the other directions are left alone"
             >

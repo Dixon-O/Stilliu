@@ -188,7 +188,14 @@ class DirectionCard(BaseModel):
 class AnalyzeResponse(BaseModel):
     draft_scores: DraftScores
     directions: list[DirectionCard]
-    baseline_preview: str = Field("", description="First 160 chars of the generic baseline, for transparency.")
+    baseline_preview: str = Field(
+        "",
+        description=(
+            "The full bland baseline this draft was scored against. Sent whole, not "
+            "truncated: it is the anchor for every distinctiveness score, so a reader "
+            "who cannot see all of it cannot check the measurement."
+        ),
+    )
     demo_mode: bool = False
 
 
@@ -248,5 +255,12 @@ class ScoreOnlyRequest(BaseModel):
 
 class ScoreOnlyResponse(BaseModel):
     draft_scores: DraftScores
-    baseline_preview: str = Field("", description="First 160 chars of the generated baseline, for transparency.")
+    baseline_preview: str = Field(
+        "",
+        description=(
+            "The full bland baseline this draft was scored against. Sent whole, not "
+            "truncated: it is the anchor for every distinctiveness score, so a reader "
+            "who cannot see all of it cannot check the measurement."
+        ),
+    )
     demo_mode: bool = False

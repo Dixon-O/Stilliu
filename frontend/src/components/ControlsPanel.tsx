@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import {
-  DEFAULT_CONTROLS,
+  countActive,
   DIVERGENCE_NOTCHES,
   FORMAT_OPTIONS,
   LENGTH_OPTIONS,
@@ -40,7 +40,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'voice',    label: 'Voice' },
 ]
 
-/** Which controls live behind which tab — drives the "moved off default" counts. */
+/** Which controls live behind which tab — drives the per-tab active count. */
 const TAB_KEYS: Record<TabId, (keyof WriterControls)[]> = {
   shape:    ['divergence', 'fmt', 'length', 'opening', 'rhythm'],
   register: ['pov', 'tense', 'vocabulary', 'tone', 'audience'],
@@ -91,6 +91,8 @@ interface Props {
   onToggleStyle: (name: string) => void
   onClearStyles: () => void
   onRestoreDefaults: () => void
+  /** Return every writer control to neutral, leaving the style selection alone. */
+  onResetControls: () => void
   voiceActive: boolean
 }
 
@@ -106,6 +108,7 @@ export default function ControlsPanel({
   onToggleStyle,
   onClearStyles,
   onRestoreDefaults,
+  onResetControls,
   voiceActive,
 }: Props) {
   const [tab, setTab] = useState<TabId>('shape')
@@ -145,13 +148,21 @@ export default function ControlsPanel({
       .filter((x) => x.items.length > 0)
   }, [library, searching, needle])
 
+  // How many controls in each tab are actively instructing the model. Counting
+  // *active* rather than *changed from default* is what makes this monotonic:
+  // ticking a guard always adds one. Counting off-default made switching
+  // `preserve_facts` off read as "1 change", which is why an untouched Guards
+  // tab used to show a number.
   const badges = useMemo(() => {
     const out = {} as Record<TabId, number>
-    for (const t of TABS) {
-      out[t.id] = TAB_KEYS[t.id].filter((k) => controls[k] !== DEFAULT_CONTROLS[k]).length
-    }
+    for (const t of TABS) out[t.id] = countActive(controls, TAB_KEYS[t.id])
+    // Voice anchoring only reaches the prompt once there is a fingerprint to
+    // anchor to. Counting it while the slider is disabled would advertise a
+    // constraint that is not in force — the same false-positive the off-default
+    // count used to produce.
+    if (!voiceActive) out.voice = 0
     return out
-  }, [controls])
+  }, [controls, voiceActive])
 
   // ── Presets view ──────────────────────────────────────────────────────────
   if (view === 'presets') {
@@ -316,7 +327,10 @@ export default function ControlsPanel({
   // ── Controls view ─────────────────────────────────────────────────────────
   // Sub-tabs as chips, so they read as a second tier under the pane's own tab
   // strip rather than competing with it. Each carries a count of how many of its
-  // controls have been moved off default, so nothing is hidden without a trace.
+  // controls are actively instructing the model, so a constraint set on one tab
+  // is never invisible from another.
+  const activeHere = countActive(controls, CONTROL_KEYS)
+
   return (
     <>
       <div style={S.subtabRow}>
@@ -333,10 +347,30 @@ export default function ControlsPanel({
               onClick={() => setTab(t.id)}
             >
               {t.label}
-              {badges[t.id] > 0 && <span className="tab__count">{badges[t.id]}</span>}
+              {badges[t.id] > 0 && (
+                <span
+                  className="tab__count"
+                  title={`${badges[t.id]} active — ${badges[t.id] === 1 ? 'one control here is' : `${badges[t.id]} controls here are`} instructing the model`}
+                >
+                  {badges[t.id]}
+                </span>
+              )}
             </button>
           ))}
         </div>
+
+        {/* The counts say something is in force; this is how you put it back.
+            Without it, finding which tab holds a stray constraint is a hunt. */}
+        {activeHere > 0 && (
+          <button
+            className="btn btn--quiet btn--sm"
+            type="button"
+            onClick={onResetControls}
+            title="Return every control to neutral. Your style selection is left alone."
+          >
+            Reset {activeHere}
+          </button>
+        )}
       </div>
 
       <div
@@ -618,7 +652,7 @@ const S: Record<string, React.CSSProperties> = {
      and work, so rows get space to be hit and read rather than being packed.
      The 14px top padding is what `.sticky-head`'s offset cancels. */
   body: { display: 'flex', flexDirection: 'column', gap: 14 },
-  subtabRow: { padding: '10px 14px 0', flex: 'none' },
+  subtabRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px 0', flex: 'none' },
   selRow: { display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' },
   spacer: { flex: 1 },
   group: { display: 'flex', flexDirection: 'column', gap: 7 },
