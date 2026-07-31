@@ -4,9 +4,10 @@ import type { VoiceFingerprint } from '@/hooks/useVoiceFingerprint'
 /**
  * VoiceOnboarding — build the voice fingerprint that unlocks the voice-match axis.
  *
- * This used to carry its own collapse toggle. It now lives inside the Voice tab
- * of the controls panel, so the tab *is* the disclosure and a second one would
- * just be a click in the way.
+ * Lives in the Voice Samples tab of the left column, next to the draft, because
+ * both are *your writing* — the draft you want measured and the samples you want
+ * measured against. It carries no collapse toggle of its own: the tab is the
+ * disclosure, and a second one would just be a click in the way.
  */
 
 interface Props {

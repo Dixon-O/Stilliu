@@ -101,39 +101,50 @@ body {
 }
 
 /* ── Shell ─────────────────────────────────────────────────────────────────
-   The whole app is meant to fit one screen. Everything that can grow gets its
-   own scroll container instead, so the page itself never scrolls and no control
-   is ever hidden below the fold. `min-height: 0` on the flex/grid children is
-   what actually lets those inner scrollers work.                            */
+   Three columns, each its own scroll region: draft on the left, results in the
+   middle, presets and controls on the right. The page itself never scrolls, so
+   the action bar and the measurement are always in view — an instrument panel
+   is only useful if the readout and the controls are visible at the same time.
+   `min-height: 0` on the flex/grid children is what lets the inner scrollers
+   actually scroll.                                                            */
 
 .app {
   height: 100vh;
   height: 100dvh;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
 .workspace {
+  flex: 1;
   display: grid;
-  grid-template-columns: minmax(404px, 34%) minmax(0, 1fr);
-  gap: 14px;
-  padding: 14px;
+  grid-template-columns: 340px minmax(0, 1fr) 380px;
   min-height: 0;
   overflow: hidden;
 }
 
-.col {
+/* One column. Owns its own scrolling; never grows the page. */
+.pane {
   display: flex;
   flex-direction: column;
-  gap: 10px;
   min-height: 0;
+  overflow: hidden;
+  background: var(--paper);
+  border-right: 1px solid var(--rule);
 }
+.pane:last-child { border-right: none; }
 
-.scroll {
+/* The middle column is the workbench surface, so it sits back a shade from the
+   two instrument columns flanking it. */
+.pane--center { background: var(--bench); }
+
+.pane__scroll {
+  flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
   min-height: 0;
+  padding: 14px;
 }
 
 /* A header that stays put while its panel scrolls — the search box and the
@@ -164,7 +175,221 @@ body {
   padding: 9px 16px;
   background: var(--paper);
   border-bottom: 1px solid var(--rule);
+  flex: none;
+  z-index: 20;
 }
+
+/* The mark: the three axis hues in one gradient, so the brand is literally the
+   three things this instrument measures. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.brand__mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: linear-gradient(135deg, var(--axis-dist), var(--axis-voice) 55%, var(--axis-onmsg));
+  color: var(--on-accent);
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 800;
+  box-shadow: var(--shadow);
+}
+.brand__text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+
+/* ── Action bar ────────────────────────────────────────────────────────────
+   The two verbs and the state that governs them, pinned above all three
+   columns. Score Draft is the fast path; Generate Directions is the full one. */
+
+.actionbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 16px;
+  background: var(--well);
+  border-bottom: 1px solid var(--rule);
+  flex: none;
+}
+
+/* A read-only pill: word count, voice state. Says what it is, does nothing. */
+.stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--rule);
+  border-radius: 99px;
+  background: var(--paper);
+  padding: 5px 11px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+/* ── Footer ────────────────────────────────────────────────────────────────*/
+
+.footbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 7px 16px;
+  background: var(--paper);
+  border-top: 1px solid var(--rule);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  flex: none;
+}
+
+/* ── Pane tab strip ────────────────────────────────────────────────────────
+   Top-level tabs inside a column (Draft/Voice, Presets/Controls). Distinct from
+   `.tabs`, which is the output-side strip.                                    */
+
+.pane__tabs {
+  display: flex;
+  gap: 18px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--rule);
+  flex: none;
+}
+
+.pane__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 11px 0 9px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--ink-3);
+  white-space: nowrap;
+  transition: color 0.12s, border-color 0.12s;
+}
+.pane__tab:hover { color: var(--ink); }
+.pane__tab[aria-selected="true"] { color: var(--accent-ink); border-bottom-color: var(--accent); }
+
+/* Sub-tabs inside the Controls pane — chips, so they read as a second tier
+   rather than competing with the strip above them. */
+.subtabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.subtab {
+  border: 1px solid var(--rule);
+  border-radius: 99px;
+  background: var(--paper);
+  padding: 5px 11px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.subtab:hover { border-color: var(--rule-firm); background: var(--well); }
+.subtab[aria-selected="true"] {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent-ink);
+}
+
+/* ── Section heading inside a pane ─────────────────────────────────────────*/
+
+.sectionhead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 9px;
+}
+.sectionhead h2 { font-size: 14px; font-weight: 700; }
+.sectionhead .note { margin-left: auto; }
+
+/* ── Direction cards ───────────────────────────────────────────────────────
+   Every direction visible at once. Tabs made comparing the second against the
+   fifth a memory exercise; a grid makes it a glance, which matters because the
+   whole point is comparison.                                                  */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 13px;
+  align-items: start;
+}
+
+.dcard {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  padding: 13px;
+  animation: card-in 0.3s ease both;
+}
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: none; }
+}
+.dcard--pending { opacity: 0.6; }
+
+.dcard__head { display: flex; align-items: flex-start; gap: 8px; }
+.dcard__title { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.dcard__name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.dcard__badges { display: flex; flex-wrap: wrap; gap: 5px; }
+
+/* The rewrite itself. Serif, scrollable, capped — a long direction must not
+   push its own scores off the card. */
+.dcard__text {
+  font-family: var(--serif);
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--ink);
+  white-space: pre-wrap;
+  background: var(--well);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 10px 11px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.dcard__axes { display: flex; flex-direction: column; gap: 7px; }
+.dcard__foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dcard__verdict { font-size: 11px; }
+.dcard__verdict--good { color: var(--high); }
+.dcard__verdict--bad { color: var(--low); }
+
+/* ── Nudge banner ──────────────────────────────────────────────────────────*/
+
+.nudge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--axis-voice-tint);
+  border: 1px solid #b6dce8;
+  border-radius: var(--r);
+  padding: 9px 12px;
+  margin-bottom: 13px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+.nudge__action { margin-left: auto; }
+
+/* ── Wordmark & badges ─────────────────────────────────────────────────────*/
 
 .wordmark {
   font-size: 17px;
@@ -174,11 +399,14 @@ body {
 }
 .wordmark span { color: var(--accent); }
 
+/* Sits under the wordmark inside .brand__text, so no divider rule — the stack
+   itself is the separation. */
 .tagline {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ink-3);
-  border-left: 1px solid var(--rule);
-  padding-left: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .badge {
@@ -193,80 +421,13 @@ body {
   white-space: nowrap;
 }
 .badge--warn { border-color: #f0d3a8; background: var(--mid-tint); color: var(--mid); font-weight: 700; }
-.badge--live { border-color: #a9e0cd; background: var(--high-tint); color: var(--high); font-weight: 700; }
-
-/* ── Cards & panels ────────────────────────────────────────────────────────*/
-
-.card {
-  background: var(--paper);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow);
-  min-height: 0;
-  /* Tab rows and meter blocks sit flush to the edges, so clip them to the
-     rounded corners rather than letting their fills square them off. */
-  overflow: hidden;
-}
-.card--flex { display: flex; flex-direction: column; }
-
-.panel-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 13px;
-  border-bottom: 1px solid var(--rule);
-  flex-wrap: wrap;
-}
-
-.eyebrow {
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.9px;
-  text-transform: uppercase;
-  color: var(--ink-3);
-}
 
 .note { font-size: 11.5px; color: var(--ink-3); }
-.note--right { margin-left: auto; }
 
-/* ── Tabs ──────────────────────────────────────────────────────────────────*/
+/* ── Count badges ──────────────────────────────────────────────────────────
+   Worn by pane tabs and preset group headers: how many are chosen, or how many
+   controls sit off their default.                                             */
 
-.tabs {
-  display: flex;
-  gap: 1px;
-  border-bottom: 1px solid var(--rule);
-  overflow-x: auto;
-  scrollbar-width: none;
-  flex: none;
-}
-.tabs::-webkit-scrollbar { display: none; }
-
-.tab {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  padding: 9px 13px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
-  color: var(--ink-3);
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color 0.12s, border-color 0.12s, background 0.12s;
-}
-.tab:hover { color: var(--ink); background: var(--well); }
-.tab[aria-selected="true"] {
-  color: var(--accent-ink);
-  border-bottom-color: var(--accent);
-  background: var(--paper);
-}
 .tab__count {
   font-size: 10px;
   font-weight: 700;
@@ -276,16 +437,8 @@ body {
   background: var(--well-2);
   color: var(--ink-2);
 }
-.tab[aria-selected="true"] .tab__count { background: var(--accent); color: var(--on-accent); }
-
-/* A dot means "this tab's output no longer matches the current controls". */
-.tab__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--mid);
-  flex: none;
-}
+.pane__tab[aria-selected="true"] .tab__count,
+.subtab[aria-selected="true"] .tab__count { background: var(--accent); color: var(--on-accent); }
 
 /* ── Buttons ───────────────────────────────────────────────────────────────*/
 
@@ -320,7 +473,6 @@ button { font-family: inherit; cursor: pointer; }
 .btn--quiet:hover:not(:disabled) { background: var(--well-2); border-color: transparent; }
 
 .btn--sm { font-size: 11.5px; padding: 5px 10px; border-radius: var(--r-sm); }
-.btn--grow { flex: 1; }
 .btn--done { border-color: var(--high); color: var(--high); background: var(--high-tint); }
 
 /* ── Form controls ─────────────────────────────────────────────────────────*/
@@ -385,9 +537,7 @@ input[type="range"] {
    region actually resolved. It reads /health rather than config, so it can never
    claim a model that isn't loaded — the point of the whole registry.          */
 
-.health { position: relative; }
-
-.health__pill {
+.health {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -403,17 +553,17 @@ input[type="range"] {
   white-space: nowrap;
   transition: border-color 0.12s, background 0.12s;
 }
-.health__pill:hover { border-color: var(--rule-firm); background: var(--paper); }
+.health:hover { border-color: var(--rule-firm); background: var(--paper); }
 
 .health__dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-.health__dot--live { background: var(--high); }
-.health__dot--demo { background: var(--mid); }
+.health--live .health__dot { background: var(--high); }
+.health--demo .health__dot { background: var(--mid); }
 
-.health__popover {
+.popover {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  z-index: 40;
+  z-index: 50;
   width: 320px;
   max-width: calc(100vw - 32px);
   background: var(--paper);
@@ -425,31 +575,27 @@ input[type="range"] {
   cursor: default;
 }
 
-.health__row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 6px 0;
-  border-bottom: 1px dashed var(--rule);
-  font-size: 11.5px;
+/* Role on the left, the id the region actually resolved on the right. A dl
+   because that is what this is: terms and their definitions. */
+.popover__rows {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px 12px;
+  margin: 0;
 }
-.health__row:last-of-type { border-bottom: none; }
-.health__role { color: var(--ink-3); flex: none; }
-.health__model {
+.popover__rows dt {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.popover__rows dd {
+  margin: 0;
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--ink);
-  text-align: right;
   word-break: break-all;
-}
-.health__note {
-  margin-top: 9px;
-  padding-top: 9px;
-  border-top: 1px solid var(--rule);
-  font-size: 10.5px;
-  line-height: 1.5;
-  color: var(--ink-3);
 }
 
 /* ── Style picker ──────────────────────────────────────────────────────────*/
@@ -742,23 +888,6 @@ input[type="range"] {
 .style[aria-pressed="true"] .style__avoid { display: block; }
 .style__avoid strong { color: var(--low); font-weight: 600; }
 
-/* ── Generated prose ───────────────────────────────────────────────────────*/
-
-.prose {
-  font-family: var(--serif);
-  font-size: 15.5px;
-  line-height: 1.72;
-  color: var(--ink);
-  white-space: pre-wrap;
-}
-
-.quote-well {
-  background: var(--well);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-sm);
-  padding: 8px 10px;
-}
-
 .callout {
   font-size: 11.5px;
   line-height: 1.45;
@@ -812,22 +941,50 @@ input[type="range"] {
 
 /* ── Scrollbars ────────────────────────────────────────────────────────────*/
 
-.scroll::-webkit-scrollbar, .draft-input::-webkit-scrollbar { width: 9px; }
-.scroll::-webkit-scrollbar-track, .draft-input::-webkit-scrollbar-track { background: transparent; }
-.scroll::-webkit-scrollbar-thumb, .draft-input::-webkit-scrollbar-thumb {
+.pane__scroll::-webkit-scrollbar, .draft-input::-webkit-scrollbar, .dcard__text::-webkit-scrollbar { width: 9px; }
+.pane__scroll::-webkit-scrollbar-track, .draft-input::-webkit-scrollbar-track, .dcard__text::-webkit-scrollbar-track { background: transparent; }
+.pane__scroll::-webkit-scrollbar-thumb, .draft-input::-webkit-scrollbar-thumb, .dcard__text::-webkit-scrollbar-thumb {
   background: var(--rule-firm);
   border-radius: 99px;
   border: 2px solid var(--paper);
 }
-.scroll::-webkit-scrollbar-thumb:hover, .draft-input::-webkit-scrollbar-thumb:hover { background: var(--ink-3); }
+.pane__scroll::-webkit-scrollbar-thumb:hover, .draft-input::-webkit-scrollbar-thumb:hover, .dcard__text::-webkit-scrollbar-thumb:hover { background: var(--ink-3); }
 
 /* ── Narrow viewports ──────────────────────────────────────────────────────
-   Below this width one screen genuinely cannot hold both columns, so the
-   single-viewport rule is dropped rather than crushed and the page scrolls. */
+   Below 1180px the side columns tighten. Below 980px one screen genuinely
+   cannot hold three columns, so the grid collapses to one and a tab bar picks
+   which column you are looking at — the workflow stays whole rather than being
+   crushed or hidden below a fold.                                             */
 
-@media (max-width: 1080px) {
-  .app { height: auto; min-height: 100vh; overflow: visible; }
-  .workspace { grid-template-columns: minmax(0, 1fr); overflow: visible; }
-  .col { min-height: auto; }
-  .draft-input { min-height: 180px; }
+.mobiletabs { display: none; }
+
+@media (max-width: 1180px) {
+  .workspace { grid-template-columns: 300px minmax(0, 1fr) 330px; }
+}
+
+@media (max-width: 980px) {
+  .mobiletabs {
+    display: flex;
+    gap: 6px;
+    padding: 8px 12px;
+    background: var(--well);
+    border-bottom: 1px solid var(--rule);
+    overflow-x: auto;
+    scrollbar-width: none;
+    flex: none;
+  }
+  .mobiletabs::-webkit-scrollbar { display: none; }
+
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+  .pane { display: none; border-right: none; }
+  .pane--active { display: flex; }
+  .pane--center { background: var(--paper); }
+
+  .cards { grid-template-columns: minmax(0, 1fr); }
+  .tagline { display: none; }
+  .topbar, .actionbar { padding-left: 12px; padding-right: 12px; }
+}
+
+@media (max-width: 560px) {
+  .popover { width: 280px; right: -8px; }
 }

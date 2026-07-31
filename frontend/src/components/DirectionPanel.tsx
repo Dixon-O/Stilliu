@@ -3,20 +3,22 @@ import type { DirectionCard, DraftScores } from '@/api/client'
 import AxisMeter from './AxisMeter'
 
 /**
- * DirectionPanel — the output side, one tab per style.
+ * DirectionPanel — the results workspace.
  *
- * Directions used to stack vertically, which meant comparing the second against
- * the fifth was a scrolling exercise and the axis scores of the one you were
- * reading were usually off-screen. Tabs put every direction's identifier along
- * the top, keep the three meters fixed in place as you switch, and let a single
- * direction be regenerated on its own — so tweaking one control costs one model
- * call instead of the whole batch.
+ * Directions are a grid of cards rather than a row of tabs. Tabs made comparing
+ * the second direction against the fifth a memory exercise: you could only ever
+ * see one set of scores at a time, and comparison is the entire point of this
+ * tool. A grid puts every rewrite and every delta on screen together, which is
+ * the one arrangement that lets you actually pick a winner.
+ *
+ * Each card still regenerates on its own — one model call, scored against the
+ * same anchors, so its deltas stay comparable with the rest.
  */
 
 export type SlotStatus = 'empty' | 'loading' | 'ready' | 'error'
 
 export interface DirectionSlot {
-  /** Style name. Doubles as the tab label and the React key. */
+  /** Style name. Doubles as the card heading and the React key. */
   style: string
   card: DirectionCard | null
   status: SlotStatus
@@ -27,31 +29,106 @@ export interface DirectionSlot {
 
 interface Props {
   slots: DirectionSlot[]
-  activeStyle: string | null
-  onSelect: (style: string) => void
   onGenerate: (style: string) => void
   /** The draft's own scores, pinned to each rail for comparison. */
   draftScores: DraftScores | null
   /** True while any request is in flight — keeps the writer from stacking calls. */
   busy: boolean
+  /** Shown above the grid until a voice fingerprint exists. */
+  voiceActive: boolean
+  onOpenVoice: () => void
 }
 
 export default function DirectionPanel({
   slots,
-  activeStyle,
-  onSelect,
   onGenerate,
   draftScores,
   busy,
+  voiceActive,
+  onOpenVoice,
 }: Props) {
-  const [copied, setCopied] = useState(false)
-  const [showDetail, setShowDetail] = useState(false)
+  return (
+    <div className="pane__scroll">
+      {!voiceActive && (
+        <div className="nudge">
+          <span>Add voice samples to see whether these rewrites still sound like you.</span>
+          <button type="button" className="btn btn--sm nudge__action" onClick={onOpenVoice}>
+            Add samples
+          </button>
+        </div>
+      )}
 
-  // Falls back to the first tab, so a style that has just been deselected can
-  // never leave the panel pointing at nothing.
-  const activeIndex = Math.max(slots.findIndex((s) => s.style === activeStyle), 0)
-  const active = slots[activeIndex] ?? null
-  const card = active?.card ?? null
+      <div className="sectionhead">
+        <h2>Directions</h2>
+        <span className="note">
+          {slots.length === 0
+            ? 'nothing selected'
+            : `${slots.length} selected · up to 6 per request`}
+        </span>
+      </div>
+
+      <div className="legend">
+        <span>
+          <span className="meter__dot" style={{ background: 'var(--axis-dist)' }} />
+          Distinctiveness
+        </span>
+        <span>
+          <span className="meter__dot" style={{ background: 'var(--axis-voice)' }} />
+          Voice Match
+        </span>
+        <span>
+          <span className="meter__dot" style={{ background: 'var(--axis-onmsg)' }} />
+          On-message
+        </span>
+        <span>
+          <span className="legend__tick" />
+          ghost tick = your draft's score on that axis
+        </span>
+      </div>
+
+      {slots.length === 0 ? (
+        <div className="empty">
+          <span className="empty__rule" />
+          <p style={S.emptyLead}>No directions yet</p>
+          <p className="note" style={{ maxWidth: 380 }}>
+            Write a draft on the left, pick up to six presets (or a custom brief) on the
+            right, then hit <strong>Write directions</strong>. Every rewrite comes back
+            with its axis scores and the delta versus your draft attached.
+          </p>
+        </div>
+      ) : (
+        <div className="cards">
+          {slots.map((slot) => (
+            <Card
+              key={slot.style}
+              slot={slot}
+              draftScores={draftScores}
+              busy={busy}
+              onGenerate={onGenerate}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── One direction ────────────────────────────────────────────────────────────
+
+function Card({
+  slot,
+  draftScores,
+  busy,
+  onGenerate,
+}: {
+  slot: DirectionSlot
+  draftScores: DraftScores | null
+  busy: boolean
+  onGenerate: (style: string) => void
+}) {
+  const [copied, setCopied] = useState(false)
+  const [showFlags, setShowFlags] = useState(false)
+  const card = slot.card
 
   function copy(text: string) {
     void navigator.clipboard.writeText(text).then(() => {
@@ -60,82 +137,116 @@ export default function DirectionPanel({
     })
   }
 
-  if (slots.length === 0) {
-    return (
-      <section className="card card--flex" style={S.card} aria-label="Directions">
-        <div className="empty">
-          <span className="empty__rule" />
-          <p style={S.emptyLead}>No directions yet</p>
-          <p className="note" style={{ maxWidth: 340 }}>
-            Pick your styles on the left, paste a draft, then generate. Each style becomes
-            its own tab up here, measured against your draft on three axes.
-          </p>
-        </div>
-      </section>
-    )
-  }
+  const flagged = !!card && card.faithfulness < 80
+  const delta = card?.deltas.distinctiveness ?? null
 
   return (
-    <section className="card card--flex" style={S.card} aria-label="Directions">
-      <div className="tabs" role="tablist" aria-label="Generated directions">
-        {slots.map((s, i) => (
-          <button
-            key={s.style}
-            role="tab"
-            type="button"
-            className="tab"
-            // Style names carry spaces and apostrophes, so the tab/panel pairing
-            // is keyed by position rather than by the label itself.
-            id={`dir-tab-${i}`}
-            aria-controls="dir-panel"
-            aria-selected={active?.style === s.style}
-            onClick={() => {
-              onSelect(s.style)
-              setShowDetail(false)
-            }}
-            title={
-              s.status === 'empty'
-                ? 'Not generated yet'
-                : s.stale
-                  ? 'Your controls changed after this was written'
-                  : undefined
-            }
-          >
-            {s.style}
-            {s.status === 'loading' && <span style={S.pulse}>·</span>}
-            {s.status === 'error' && <span style={S.errMark}>!</span>}
-            {s.status === 'empty' && <span style={S.emptyMark}>+</span>}
-            {s.status === 'ready' && s.stale && <span className="tab__dot" />}
-          </button>
-        ))}
+    <article className={slot.status === 'loading' ? 'dcard dcard--pending' : 'dcard'}>
+      <div className="dcard__head">
+        <div className="dcard__title">
+          <span className="dcard__name">{slot.style}</span>
+          {card && (
+            <div className="dcard__badges">
+              {card.refined && (
+                <span className="badge" title="The refine loop rewrote this to raise a weak axis">
+                  refined
+                </span>
+              )}
+              {flagged && (
+                <button
+                  type="button"
+                  className="badge badge--warn"
+                  onClick={() => setShowFlags((f) => !f)}
+                  title={`Faithfulness ${card.faithfulness}/100 — click to see the claims`}
+                >
+                  check facts
+                </button>
+              )}
+              {slot.stale && (
+                <span className="badge" title="Your controls changed after this was written">
+                  stale
+                </span>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* ── Measurement, fixed in place so switching tabs compares like for like ── */}
-      {active && (
-        <>
-          <div className="legend">
-            <span><span className="meter__dot" style={{ background: 'var(--axis-dist)' }} />Distinctive — distance from bland AI defaults</span>
-            <span><span className="meter__dot" style={{ background: 'var(--axis-voice)' }} />Voice — how much it sounds like you</span>
-            <span><span className="meter__dot" style={{ background: 'var(--axis-onmsg)' }} />On-message — meaning preserved</span>
-            <span style={S.legendTick}><span className="legend__tick" />Your draft</span>
-          </div>
+      {slot.status === 'loading' && (
+        <div style={S.shimmerStack}>
+          {[100, 92, 97, 74].map((w, i) => (
+            <div key={i} className="shimmer" style={{ width: `${w}%` }} />
+          ))}
+        </div>
+      )}
 
-          <div style={S.meters}>
+      {slot.status === 'error' && (
+        <>
+          <p className="callout callout--err">{slot.error ?? 'This direction failed.'}</p>
+          <button
+            className="btn btn--sm"
+            type="button"
+            disabled={busy}
+            onClick={() => onGenerate(slot.style)}
+          >
+            Try again
+          </button>
+        </>
+      )}
+
+      {slot.status === 'empty' && (
+        <>
+          <p className="note">
+            Not written yet. Generate just this one, or run every style at once from the
+            action bar.
+          </p>
+          <button
+            className="btn btn--primary btn--sm"
+            type="button"
+            disabled={busy}
+            onClick={() => onGenerate(slot.style)}
+          >
+            Write this direction
+          </button>
+        </>
+      )}
+
+      {slot.status === 'ready' && card && (
+        <>
+          <p className="note">{card.persona_description}</p>
+
+          {slot.stale && (
+            <p className="callout callout--warn">
+              Your controls changed after this was written, so the scores below describe
+              the older settings.
+            </p>
+          )}
+
+          {showFlags && card.unsupported_claims.length > 0 && (
+            <div className="callout callout--warn">
+              <strong>Not found in your draft:</strong>{' '}
+              {card.unsupported_claims.slice(0, 5).join(' · ')}
+            </div>
+          )}
+
+          <p className="dcard__text">{card.text}</p>
+
+          <div className="dcard__axes">
             <AxisMeter
               axis="dist"
-              label="Distinctive"
-              value={card ? card.scores.distinctiveness : null}
+              label="Distinct"
+              value={card.scores.distinctiveness}
               baseline={draftScores?.distinctiveness ?? null}
-              delta={card ? card.deltas.distinctiveness : null}
+              delta={card.deltas.distinctiveness}
               hint="100 means it departs boldly from bland AI defaults. The tick is your draft."
             />
-            {(card?.scores.voice_match != null || draftScores?.voice_match != null) && (
+            {(card.scores.voice_match != null || draftScores?.voice_match != null) && (
               <AxisMeter
                 axis="voice"
                 label="Voice"
-                value={card ? card.scores.voice_match : null}
+                value={card.scores.voice_match}
                 baseline={draftScores?.voice_match ?? null}
-                delta={card ? card.deltas.voice_match : null}
+                delta={card.deltas.voice_match}
                 tone="voice"
                 hint="100 means it reads as yours, measured against your writing samples."
               />
@@ -143,175 +254,54 @@ export default function DirectionPanel({
             <AxisMeter
               axis="onmsg"
               label="On-message"
-              value={card ? card.scores.on_message : null}
-              hint="100 means every point in your draft survived the rewrite. Reported against a neutral midpoint, not your draft — a draft is trivially 100% on-message with itself."
+              value={card.scores.on_message}
+              hint="100 means every point in your draft survived the rewrite. Measured against a neutral midpoint, not your draft."
             />
           </div>
-        </>
-      )}
 
-      {/* ── The direction itself ─────────────────────────────────────────────── */}
-      <div
-        className="scroll"
-        role="tabpanel"
-        id="dir-panel"
-        aria-labelledby={`dir-tab-${activeIndex}`}
-        style={S.body}
-      >
-        {active?.status === 'loading' && (
-          <div style={S.shimmerStack}>
-            {[100, 94, 88, 97, 72, 90, 60].map((w, i) => (
-              <div key={i} className="shimmer" style={{ width: `${w}%` }} />
-            ))}
-          </div>
-        )}
+          {delta != null && (
+            <p
+              className={
+                delta >= 0.5
+                  ? 'dcard__verdict dcard__verdict--good'
+                  : delta <= -0.5
+                    ? 'dcard__verdict dcard__verdict--bad'
+                    : 'dcard__verdict note'
+              }
+            >
+              {delta >= 0.5
+                ? `${Math.abs(delta).toFixed(0)} points more distinctive than your draft.`
+                : delta <= -0.5
+                  ? `${Math.abs(delta).toFixed(0)} points less distinctive than your draft.`
+                  : 'About as distinctive as your draft.'}
+            </p>
+          )}
 
-        {active?.status === 'error' && (
-          <div style={S.stack}>
-            <p className="callout callout--err">{active.error ?? 'This direction failed.'}</p>
+          <div className="dcard__foot">
+            <button
+              className={copied ? 'btn btn--sm btn--done' : 'btn btn--sm'}
+              type="button"
+              onClick={() => copy(card.text)}
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </button>
             <button
               className="btn btn--sm"
               type="button"
               disabled={busy}
-              onClick={() => onGenerate(active.style)}
+              onClick={() => onGenerate(slot.style)}
+              title="One model call — the other directions are left alone"
             >
-              Try again
+              Rewrite this one
             </button>
           </div>
-        )}
-
-        {active?.status === 'empty' && (
-          <div className="empty">
-            <span className="empty__rule" />
-            <p style={S.emptyLead}>{active.style}</p>
-            <p className="note" style={{ maxWidth: 320 }}>
-              Not written yet. Generate just this one, or run every style at once from the
-              left.
-            </p>
-            <button
-              className="btn btn--primary btn--sm"
-              type="button"
-              disabled={busy}
-              onClick={() => onGenerate(active.style)}
-              style={{ marginTop: 4 }}
-            >
-              Write this direction
-            </button>
-          </div>
-        )}
-
-        {active?.status === 'ready' && card && (
-          <div style={S.stack}>
-            <div style={S.head}>
-              <p className="note" style={{ flex: 1 }}>{card.persona_description}</p>
-              {card.refined && (
-                <span className="badge" title="The refine loop rewrote this to raise a weak axis">
-                  refined
-                </span>
-              )}
-              {card.faithfulness < 80 && (
-                <span className="badge badge--warn" title={`Faithfulness ${card.faithfulness}/100`}>
-                  check facts
-                </span>
-              )}
-            </div>
-
-            {active.stale && (
-              <div className="callout callout--warn" style={S.staleRow}>
-                <span style={{ flex: 1 }}>
-                  Your controls changed after this was written, so the scores below describe
-                  the older settings.
-                </span>
-                <button
-                  className="btn btn--sm"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onGenerate(active.style)}
-                >
-                  Rewrite with new controls
-                </button>
-              </div>
-            )}
-
-            {card.faithfulness < 80 && card.unsupported_claims.length > 0 && (
-              <div className="callout callout--warn">
-                <strong>Not found in your draft:</strong>{' '}
-                {card.unsupported_claims.slice(0, 4).join(' · ')}
-              </div>
-            )}
-
-            <p className="prose">{card.text}</p>
-
-            {showDetail && card.summary && (
-              <div className="quote-well">
-                <span className="note">{card.summary}</span>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* ── Actions, pinned so Copy never scrolls away ───────────────────────── */}
-      {active?.status === 'ready' && card && (
-        <div style={S.footer}>
-          <button
-            className={copied ? 'btn btn--sm btn--done' : 'btn btn--sm'}
-            type="button"
-            onClick={() => copy(card.text)}
-          >
-            {copied ? 'Copied' : 'Copy this direction'}
-          </button>
-          <button
-            className="btn btn--sm"
-            type="button"
-            disabled={busy}
-            onClick={() => onGenerate(active.style)}
-            title="One model call — the other directions are left alone"
-          >
-            Rewrite this one
-          </button>
-          {card.summary && (
-            <button
-              className="btn btn--quiet btn--sm"
-              type="button"
-              onClick={() => setShowDetail((d) => !d)}
-            >
-              {showDetail ? 'Hide score detail' : 'Score detail'}
-            </button>
-          )}
-        </div>
+        </>
       )}
-    </section>
+    </article>
   )
 }
 
 const S: Record<string, React.CSSProperties> = {
-  card: { flex: 1, minHeight: 0 },
-  meters: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 7,
-    padding: '11px 14px',
-    borderBottom: '1px solid var(--rule)',
-    background: 'var(--well)',
-    flex: 'none',
-  },
-  body: { flex: 1, padding: '14px 16px' },
-  stack: { display: 'flex', flexDirection: 'column', gap: 11 },
-  head: { display: 'flex', alignItems: 'flex-start', gap: 7, flexWrap: 'wrap' },
-  staleRow: { display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' },
-  shimmerStack: { display: 'flex', flexDirection: 'column', gap: 9 },
-  footer: {
-    display: 'flex',
-    gap: 7,
-    flexWrap: 'wrap',
-    padding: '10px 14px',
-    borderTop: '1px solid var(--rule)',
-    flex: 'none',
-  },
-  legendTick: { marginLeft: 'auto' },
+  shimmerStack: { display: 'flex', flexDirection: 'column', gap: 8 },
   emptyLead: { fontFamily: 'var(--mono)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' },
-  pulse: { color: 'var(--accent)', fontWeight: 900, fontSize: 16, lineHeight: 0 },
-  errMark: { color: 'var(--low)', fontWeight: 900 },
-  emptyMark: { color: 'var(--ink-3)', fontWeight: 900 },
 }

@@ -13,27 +13,27 @@ import {
   type StyleLibrary,
   type WriterControls,
 } from '@/api/client'
-import type { VoiceFingerprint } from '@/hooks/useVoiceFingerprint'
-import VoiceOnboarding from './VoiceOnboarding'
 
 /**
- * ControlsPanel — every lever, in five tabs.
+ * ControlsPanel — every lever the writer has, rendered as one of two views.
  *
- * The panel used to be one long scroll with a collapsed "advanced" drawer at the
- * bottom, which meant half the controls were below the fold and the writer had
- * to remember they existed. Tabs put every group one click from the surface at a
- * fixed height, and each tab carries a count of how many of its controls the
- * writer has moved off default — so nothing is hidden without a trace.
+ * The right column carries two top-level tabs, and this component is both of
+ * them: `view="presets"` is the style library, `view="controls"` is everything
+ * else behind sub-tabs. They are one component because they share the selection
+ * arithmetic — a custom brief takes one of the same slots the presets compete
+ * for, so splitting them into two files would mean duplicating that cap.
  *
  * The panel is deliberately stateless about the *selection*: it renders the
  * `selected` array it is given and reports intent upward. That is what keeps the
  * "cleared on purpose" state intact — see App's toggleStyle.
  */
 
-type TabId = 'styles' | 'shape' | 'register' | 'guards' | 'voice'
+export type ControlsView = 'presets' | 'controls'
+
+/** Sub-tabs inside the controls view. Styles and voice samples live elsewhere. */
+type TabId = 'shape' | 'register' | 'guards' | 'voice'
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: 'styles',   label: 'Styles' },
   { id: 'shape',    label: 'Shape' },
   { id: 'register', label: 'Register' },
   { id: 'guards',   label: 'Guards' },
@@ -42,12 +42,19 @@ const TABS: { id: TabId; label: string }[] = [
 
 /** Which controls live behind which tab — drives the "moved off default" counts. */
 const TAB_KEYS: Record<TabId, (keyof WriterControls)[]> = {
-  styles:   ['custom_persona'],
   shape:    ['divergence', 'fmt', 'length', 'opening', 'rhythm'],
   register: ['pov', 'tense', 'vocabulary', 'tone', 'audience'],
   guards:   ['preserve_facts', 'avoid_ai_cadence', 'banned_words', 'keep_phrases'],
   voice:    ['voice_strength'],
 }
+
+/** Every control this panel governs, for the count on the parent's tab. */
+export const CONTROL_KEYS: (keyof WriterControls)[] = [
+  ...TAB_KEYS.shape,
+  ...TAB_KEYS.register,
+  ...TAB_KEYS.guards,
+  ...TAB_KEYS.voice,
+]
 
 /**
  * Group identity colours. Keyed by the backend's own group ids, so a group added
@@ -69,6 +76,12 @@ function groupColor(id: string): string {
 const OPEN_BY_DEFAULT = ['compression', 'counter_llm']
 
 interface Props {
+  /** Tabpanel id, so the parent's tab strip can point `aria-controls` at it. */
+  id: string
+  /** Id of the tab that currently labels this panel. */
+  labelledBy: string
+  /** Which of the two right-column tabs is showing. Owned by App. */
+  view: ControlsView
   controls: WriterControls
   onChange: (c: WriterControls) => void
   library: StyleLibrary | null
@@ -79,14 +92,12 @@ interface Props {
   onClearStyles: () => void
   onRestoreDefaults: () => void
   voiceActive: boolean
-  fingerprint: VoiceFingerprint
-  onAddSamples: (samples: string[]) => Promise<void>
-  onClearVoice: () => void
-  voiceLoading: boolean
-  voiceError: string | null
 }
 
 export default function ControlsPanel({
+  id,
+  labelledBy,
+  view,
   controls,
   onChange,
   library,
@@ -96,13 +107,8 @@ export default function ControlsPanel({
   onClearStyles,
   onRestoreDefaults,
   voiceActive,
-  fingerprint,
-  onAddSamples,
-  onClearVoice,
-  voiceLoading,
-  voiceError,
 }: Props) {
-  const [tab, setTab] = useState<TabId>('styles')
+  const [tab, setTab] = useState<TabId>('shape')
   const [query, setQuery] = useState('')
   const [openGroups, setOpenGroups] = useState<string[]>(OPEN_BY_DEFAULT)
 
@@ -142,198 +148,204 @@ export default function ControlsPanel({
   const badges = useMemo(() => {
     const out = {} as Record<TabId, number>
     for (const t of TABS) {
-      out[t.id] =
-        t.id === 'styles'
-          ? selected.length
-          : TAB_KEYS[t.id].filter((k) => controls[k] !== DEFAULT_CONTROLS[k]).length
+      out[t.id] = TAB_KEYS[t.id].filter((k) => controls[k] !== DEFAULT_CONTROLS[k]).length
     }
     return out
-  }, [controls, selected])
+  }, [controls])
 
+  // ── Presets view ──────────────────────────────────────────────────────────
+  if (view === 'presets') {
+    return (
+      <div className="pane__scroll" id={id} role="tabpanel" aria-labelledby={labelledBy}>
+        {libError && (
+          <p className="callout callout--err">
+            Could not load the style library ({libError}). Check the backend is running
+            on port 8000.
+          </p>
+        )}
+
+        {/* Count, actions and search stay in view while the list scrolls —
+            they are what you reach for *during* browsing, not before it. */}
+        <div className="sticky-head">
+          <div style={S.selRow}>
+            <span className="note">
+              {selected.length} of {room} chosen
+              {hasCustom ? ' · brief takes a slot' : ''}
+              {library ? ` · ${library.styles.length} available` : ''}
+            </span>
+            <span style={S.spacer} />
+            <button
+              className="btn btn--quiet btn--sm"
+              type="button"
+              onClick={onClearStyles}
+              disabled={selected.length === 0}
+            >
+              Clear all
+            </button>
+            <button
+              className="btn btn--quiet btn--sm"
+              type="button"
+              onClick={onRestoreDefaults}
+              disabled={!library}
+            >
+              Restore defaults
+            </button>
+          </div>
+
+          {library && (
+            <input
+              className="input"
+              placeholder="Search styles — try 'metaphor', 'argument', 'AI'"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          )}
+        </div>
+
+        {selected.length === 0 && !hasCustom && (
+          <p className="callout callout--warn">
+            Nothing selected, so there is nothing to generate. Pick a style, or write
+            your own brief at the bottom of this tab.
+          </p>
+        )}
+
+        {dropped > 0 ? (
+          <p className="callout callout--warn">
+            Your brief takes one of the {maxSelected} slots, so the last{' '}
+            {dropped === 1 ? 'style you picked' : `${dropped} styles you picked`} will sit
+            this one out. Deselect {dropped === 1 ? 'one' : `${dropped}`} to choose which.
+          </p>
+        ) : (
+          atLimit && (
+            <p className="callout callout--info">
+              At the {maxSelected}-direction limit. Each one is its own model call, so
+              deselect a style to add another.
+            </p>
+          )
+        )}
+
+        {library && (
+          <>
+            {grouped.map(({ group, items }) => {
+              const open = searching || openGroups.includes(group.id)
+              const chosenHere = items.filter((i) => selected.includes(i.name)).length
+              return (
+                <div key={group.id} style={S.group}>
+                  <button
+                    type="button"
+                    className="group-head"
+                    aria-expanded={open}
+                    onClick={() => {
+                      if (!searching) {
+                        setOpenGroups((g) =>
+                          g.includes(group.id) ? g.filter((x) => x !== group.id) : [...g, group.id],
+                        )
+                      }
+                    }}
+                  >
+                    <span
+                      className="grp-dot"
+                      style={{ background: groupColor(group.id) }}
+                      aria-hidden="true"
+                    />
+                    <span style={S.spacer}>{group.label}</span>
+                    {chosenHere > 0 && <span className="tab__count">{chosenHere}</span>}
+                    <span style={S.chevron}>{open ? '▲' : '▼'}</span>
+                  </button>
+
+                  {open && (
+                    <>
+                      <p className="field__hint">{group.blurb}</p>
+                      <div style={S.styleList}>
+                        {items.map((s) => {
+                          const on = selected.includes(s.name)
+                          return (
+                            <button
+                              key={s.name}
+                              type="button"
+                              className="style"
+                              aria-pressed={on}
+                              disabled={!on && atLimit}
+                              onClick={() => onToggleStyle(s.name)}
+                            >
+                              <span className="style__box">{on ? '✓' : ''}</span>
+                              <span style={S.styleText}>
+                                <span className="style__name">{s.name}</span>
+                                <span className="style__desc">{s.description}</span>
+                                {s.avoid && (
+                                  // Revealed by CSS only once the preset is
+                                  // selected — what it refuses to do matters
+                                  // when it is in play, not while browsing.
+                                  <span className="style__avoid">
+                                    <strong>Avoids:</strong> {s.avoid}
+                                  </span>
+                                )}
+                              </span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )
+            })}
+
+            {grouped.length === 0 && <p className="note">No styles match “{query}”.</p>}
+          </>
+        )}
+
+        <div className="field">
+          <label className="field__label">Your own style</label>
+          <textarea
+            className="textarea"
+            rows={3}
+            placeholder="Describe a style in your own words — e.g. 'clipped and unsentimental, like a case file, but every third sentence lands a joke'"
+            value={controls.custom_persona}
+            onChange={(e) => set('custom_persona', e.target.value)}
+          />
+          <span className="field__hint">
+            Runs as its own direction alongside the presets, and takes one of the{' '}
+            {maxSelected} slots. It works with no preset selected at all.
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Controls view ─────────────────────────────────────────────────────────
+  // Sub-tabs as chips, so they read as a second tier under the pane's own tab
+  // strip rather than competing with it. Each carries a count of how many of its
+  // controls have been moved off default, so nothing is hidden without a trace.
   return (
-    <section className="card card--flex" style={S.card} aria-label="Writer controls">
-      <div className="tabs" role="tablist" aria-label="Control groups">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            role="tab"
-            type="button"
-            className="tab"
-            id={`ctl-tab-${t.id}`}
-            aria-controls="ctl-panel"
-            aria-selected={tab === t.id}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-            {badges[t.id] > 0 && <span className="tab__count">{badges[t.id]}</span>}
-          </button>
-        ))}
+    <>
+      <div style={S.subtabRow}>
+        <div className="subtabs" role="tablist" aria-label="Control groups">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              role="tab"
+              type="button"
+              className="subtab"
+              id={`ctl-tab-${t.id}`}
+              aria-controls={id}
+              aria-selected={tab === t.id}
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+              {badges[t.id] > 0 && <span className="tab__count">{badges[t.id]}</span>}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div
-        className="scroll"
+        className="pane__scroll"
         role="tabpanel"
-        id="ctl-panel"
-        aria-labelledby={`ctl-tab-${tab}`}
+        id={id}
+        aria-labelledby={labelledBy}
         style={S.body}
       >
-        {/* ── Styles ──────────────────────────────────────────────────────── */}
-        {tab === 'styles' && (
-          <>
-            {libError && (
-              <p className="callout callout--err">
-                Could not load the style library ({libError}). Check the backend is running
-                on port 8000.
-              </p>
-            )}
-
-            {/* Count, actions and search stay in view while the list scrolls —
-                they are what you reach for *during* browsing, not before it. */}
-            <div className="sticky-head">
-              <div style={S.selRow}>
-                <span className="note">
-                  {selected.length} of {room} chosen
-                  {hasCustom ? ' · brief takes a slot' : ''}
-                  {library ? ` · ${library.styles.length} available` : ''}
-                </span>
-                <span style={S.spacer} />
-                <button
-                  className="btn btn--quiet btn--sm"
-                  type="button"
-                  onClick={onClearStyles}
-                  disabled={selected.length === 0}
-                >
-                  Clear all
-                </button>
-                <button
-                  className="btn btn--quiet btn--sm"
-                  type="button"
-                  onClick={onRestoreDefaults}
-                  disabled={!library}
-                >
-                  Restore defaults
-                </button>
-              </div>
-
-              {library && (
-                <input
-                  className="input"
-                  placeholder="Search styles — try 'metaphor', 'argument', 'AI'"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-              )}
-            </div>
-
-            {selected.length === 0 && !hasCustom && (
-              <p className="callout callout--warn">
-                Nothing selected, so there is nothing to generate. Pick a style, or write
-                your own brief at the bottom of this tab.
-              </p>
-            )}
-
-            {dropped > 0 ? (
-              <p className="callout callout--warn">
-                Your brief takes one of the {maxSelected} slots, so the last{' '}
-                {dropped === 1 ? 'style you picked' : `${dropped} styles you picked`} will sit
-                this one out. Deselect {dropped === 1 ? 'one' : `${dropped}`} to choose which.
-              </p>
-            ) : (
-              atLimit && (
-                <p className="callout callout--info">
-                  At the {maxSelected}-direction limit. Each one is its own model call, so
-                  deselect a style to add another.
-                </p>
-              )
-            )}
-
-            {library && (
-              <>
-                {grouped.map(({ group, items }) => {
-                  const open = searching || openGroups.includes(group.id)
-                  const chosenHere = items.filter((i) => selected.includes(i.name)).length
-                  return (
-                    <div key={group.id} style={S.group}>
-                      <button
-                        type="button"
-                        className="group-head"
-                        aria-expanded={open}
-                        onClick={() => {
-                          if (!searching) {
-                            setOpenGroups((g) =>
-                              g.includes(group.id) ? g.filter((x) => x !== group.id) : [...g, group.id],
-                            )
-                          }
-                        }}
-                      >
-                        <span
-                          className="grp-dot"
-                          style={{ background: groupColor(group.id) }}
-                          aria-hidden="true"
-                        />
-                        <span style={S.spacer}>{group.label}</span>
-                        {chosenHere > 0 && <span className="tab__count">{chosenHere}</span>}
-                        <span style={S.chevron}>{open ? '▲' : '▼'}</span>
-                      </button>
-
-                      {open && (
-                        <>
-                          <p className="field__hint">{group.blurb}</p>
-                          <div style={S.styleList}>
-                            {items.map((s) => {
-                              const on = selected.includes(s.name)
-                              return (
-                                <button
-                                  key={s.name}
-                                  type="button"
-                                  className="style"
-                                  aria-pressed={on}
-                                  disabled={!on && atLimit}
-                                  onClick={() => onToggleStyle(s.name)}
-                                >
-                                  <span className="style__box">{on ? '✓' : ''}</span>
-                                  <span style={S.styleText}>
-                                    <span className="style__name">{s.name}</span>
-                                    <span className="style__desc">{s.description}</span>
-                                    {s.avoid && (
-                                      // Revealed by CSS only once the preset is
-                                      // selected — what it refuses to do matters
-                                      // when it is in play, not while browsing.
-                                      <span className="style__avoid">
-                                        <strong>Avoids:</strong> {s.avoid}
-                                      </span>
-                                    )}
-                                  </span>
-                                </button>
-                              )
-                            })}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  )
-                })}
-
-                {grouped.length === 0 && <p className="note">No styles match “{query}”.</p>}
-              </>
-            )}
-
-            <div className="field">
-              <label className="field__label">Your own style</label>
-              <textarea
-                className="textarea"
-                rows={3}
-                placeholder="Describe a style in your own words — e.g. 'clipped and unsentimental, like a case file, but every third sentence lands a joke'"
-                value={controls.custom_persona}
-                onChange={(e) => set('custom_persona', e.target.value)}
-              />
-              <span className="field__hint">
-                Runs as its own direction alongside the presets, and takes one of the{' '}
-                {maxSelected} slots. It works with no preset selected at all.
-              </span>
-            </div>
-          </>
-        )}
 
         {/* ── Shape ───────────────────────────────────────────────────────── */}
         {tab === 'shape' && (
@@ -493,23 +505,13 @@ export default function ControlsPanel({
               <span className="field__hint">
                 {voiceActive
                   ? 'Higher hugs your voice more tightly, which trades off against distinctiveness.'
-                  : 'Add samples below to enable voice anchoring and the voice-match axis.'}
+                  : 'Add samples in the Voice Samples tab, on the left, to enable voice anchoring and the voice-match axis.'}
               </span>
             </div>
-
-            <hr style={S.rule} />
-
-            <VoiceOnboarding
-              fingerprint={fingerprint}
-              onAddSamples={onAddSamples}
-              onClear={onClearVoice}
-              loading={voiceLoading}
-              error={voiceError}
-            />
           </>
         )}
       </div>
-    </section>
+    </>
   )
 }
 
@@ -615,7 +617,8 @@ const S: Record<string, React.CSSProperties> = {
   /* Roomier than the rest of the chrome on purpose: this is the panel you sit in
      and work, so rows get space to be hit and read rather than being packed.
      The 14px top padding is what `.sticky-head`'s offset cancels. */
-  body: { display: 'flex', flexDirection: 'column', gap: 14, padding: '14px 15px', flex: 1 },
+  body: { display: 'flex', flexDirection: 'column', gap: 14 },
+  subtabRow: { padding: '10px 14px 0', flex: 'none' },
   selRow: { display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' },
   spacer: { flex: 1 },
   group: { display: 'flex', flexDirection: 'column', gap: 7 },
