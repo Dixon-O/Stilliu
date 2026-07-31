@@ -8,7 +8,13 @@ import {
   generateDirection,
   scoreDraft,
 } from '@/api/client'
-import type { DirectionCard, DraftScores, StyleLibrary, WriterControls } from '@/api/client'
+import type {
+  DirectionCard,
+  DraftScores,
+  HealthResponse,
+  StyleLibrary,
+  WriterControls,
+} from '@/api/client'
 import AxisMeter from '@/components/AxisMeter'
 import ControlsPanel from '@/components/ControlsPanel'
 import DirectionPanel, { type DirectionSlot, type SlotStatus } from '@/components/DirectionPanel'
@@ -41,7 +47,9 @@ export default function App() {
   const [scoring, setScoring] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [demoMode, setDemoMode] = useState(false)
-  const [modelInfo, setModelInfo] = useState('')
+  /** The full /health payload, so the popover can name the resolved models. */
+  const [health, setHealth] = useState<HealthResponse | null>(null)
+  const [healthOpen, setHealthOpen] = useState(false)
 
   const {
     fingerprint,
@@ -54,11 +62,31 @@ export default function App() {
   useEffect(() => {
     checkHealth()
       .then((h) => {
+        setHealth(h)
         setDemoMode(h.demo_mode)
-        if (h.embed_model) setModelInfo(`${h.embed_model} · ${h.gen_model}`)
       })
+      // No backend reachable is indistinguishable from demo mode from here, and
+      // demo mode is the safe reading — it promises less.
       .catch(() => setDemoMode(true))
   }, [])
+
+  // A popover that can only be dismissed by the button that opened it is a trap
+  // for anyone who clicks past it, so close on outside click and on Escape.
+  useEffect(() => {
+    if (!healthOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (!(e.target as Element | null)?.closest('.health')) setHealthOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setHealthOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [healthOpen])
 
   useEffect(() => {
     let cancelled = false
@@ -240,14 +268,45 @@ export default function App() {
         <span className="wordmark">Stil<span>liu</span></span>
         <span className="tagline">Find what makes your writing unmistakable.</span>
         <span style={S.spacer} />
-        {demoMode ? (
-          <span className="badge badge--warn">Demo mode · fixture responses, no API calls</span>
-        ) : (
-          <>
-            <span className="badge badge--live">watsonx.ai · live</span>
-            {modelInfo && <span className="badge">{modelInfo}</span>}
-          </>
-        )}
+
+        {/* Which models are actually loaded, one click away. Reading /health
+            rather than config is what stops this claiming a model the region
+            never resolved. */}
+        <div className="health">
+          <button
+            type="button"
+            className="health__pill"
+            aria-expanded={healthOpen}
+            onClick={() => setHealthOpen((o) => !o)}
+            title="Which models are serving this session"
+          >
+            <span className={demoMode ? 'health__dot health__dot--demo' : 'health__dot health__dot--live'} />
+            {demoMode ? 'demo mode' : 'watsonx.ai · live'}
+          </button>
+
+          {healthOpen && (
+            <div className="health__popover" role="dialog" aria-label="Resolved models">
+              <span className="eyebrow">Resolved models</span>
+              <div className="health__row">
+                <span className="health__role">Creative</span>
+                <span className="health__model">{health?.gen_model || '—'}</span>
+              </div>
+              <div className="health__row">
+                <span className="health__role">Baseline anchor</span>
+                <span className="health__model">{health?.baseline_model || '—'}</span>
+              </div>
+              <div className="health__row">
+                <span className="health__role">Embedding</span>
+                <span className="health__model">{health?.embed_model || '—'}</span>
+              </div>
+              <p className="health__note">
+                {demoMode
+                  ? 'Serving fixture responses — no API calls and no credentials needed. Every screen stays clickable.'
+                  : 'Resolved against what this region actually hosts. The baseline is kept in a different provider family from the creative model, so distinctiveness is not measured against a colder run of the same model.'}
+              </p>
+            </div>
+          )}
+        </div>
       </header>
 
       <div className="workspace">
@@ -272,14 +331,20 @@ export default function App() {
 
             <div style={S.draftMeters}>
               <AxisMeter
+                axis="dist"
                 label="Distinctive"
                 value={draftScores?.distinctiveness ?? null}
                 hint="How far your draft already sits from bland AI defaults."
               />
               <AxisMeter
+                axis="voice"
                 label="Voice"
                 value={draftScores?.voice_match ?? null}
                 tone="voice"
+                // Locked rather than zeroed until there are samples to measure
+                // against. A guessed voice score would be the one number in this
+                // tool that isn't derived from anything.
+                lockedReason={fingerprint.isActive ? null : 'Needs your writing samples.'}
                 hint={
                   fingerprint.isActive
                     ? 'How much your draft sounds like your samples.'

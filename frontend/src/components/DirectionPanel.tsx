@@ -112,30 +112,42 @@ export default function DirectionPanel({
 
       {/* ── Measurement, fixed in place so switching tabs compares like for like ── */}
       {active && (
-        <div style={S.meters}>
-          <AxisMeter
-            label="Distinctive"
-            value={card ? card.scores.distinctiveness : null}
-            baseline={draftScores?.distinctiveness ?? null}
-            delta={card ? card.deltas.distinctiveness : null}
-            hint="100 means it departs boldly from bland AI defaults. The tick is your draft."
-          />
-          {(card?.scores.voice_match != null || draftScores?.voice_match != null) && (
+        <>
+          <div className="legend">
+            <span><span className="meter__dot" style={{ background: 'var(--axis-dist)' }} />Distinctive — distance from bland AI defaults</span>
+            <span><span className="meter__dot" style={{ background: 'var(--axis-voice)' }} />Voice — how much it sounds like you</span>
+            <span><span className="meter__dot" style={{ background: 'var(--axis-onmsg)' }} />On-message — meaning preserved</span>
+            <span style={S.legendTick}><span className="legend__tick" />Your draft</span>
+          </div>
+
+          <div style={S.meters}>
             <AxisMeter
-              label="Voice"
-              value={card ? card.scores.voice_match : null}
-              baseline={draftScores?.voice_match ?? null}
-              delta={card ? card.deltas.voice_match : null}
-              tone="voice"
-              hint="100 means it reads as yours, measured against your writing samples."
+              axis="dist"
+              label="Distinctive"
+              value={card ? card.scores.distinctiveness : null}
+              baseline={draftScores?.distinctiveness ?? null}
+              delta={card ? card.deltas.distinctiveness : null}
+              hint="100 means it departs boldly from bland AI defaults. The tick is your draft."
             />
-          )}
-          <AxisMeter
-            label="On-message"
-            value={card ? card.scores.on_message : null}
-            hint="100 means every point in your draft survived the rewrite."
-          />
-        </div>
+            {(card?.scores.voice_match != null || draftScores?.voice_match != null) && (
+              <AxisMeter
+                axis="voice"
+                label="Voice"
+                value={card ? card.scores.voice_match : null}
+                baseline={draftScores?.voice_match ?? null}
+                delta={card ? card.deltas.voice_match : null}
+                tone="voice"
+                hint="100 means it reads as yours, measured against your writing samples."
+              />
+            )}
+            <AxisMeter
+              axis="onmsg"
+              label="On-message"
+              value={card ? card.scores.on_message : null}
+              hint="100 means every point in your draft survived the rewrite. Reported against a neutral midpoint, not your draft — a draft is trivially 100% on-message with itself."
+            />
+          </div>
+        </>
       )}
 
       {/* ── The direction itself ─────────────────────────────────────────────── */}
@@ -297,6 +309,7 @@ const S: Record<string, React.CSSProperties> = {
     borderTop: '1px solid var(--rule)',
     flex: 'none',
   },
+  legendTick: { marginLeft: 'auto' },
   emptyLead: { fontFamily: 'var(--mono)', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' },
   pulse: { color: 'var(--accent)', fontWeight: 900, fontSize: 16, lineHeight: 0 },
   errMark: { color: 'var(--low)', fontWeight: 900 },

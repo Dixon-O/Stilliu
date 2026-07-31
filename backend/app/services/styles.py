@@ -326,6 +326,11 @@ def styles_payload() -> dict:
                 "group": s["group"],
                 "group_label": group_label(s["group"]),
                 "description": s["description"],
+                # The ban list is half of what a preset does — a positive-only
+                # style prompt drifts back to model defaults, which is why every
+                # preset carries one. Served so the UI can show a writer what a
+                # preset will refuse to do, not just what it aims for.
+                "avoid": s.get("avoid", ""),
             }
             for s in STYLES
         ],

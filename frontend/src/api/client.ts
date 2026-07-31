@@ -135,6 +135,12 @@ export interface StylePreset {
   group: string
   group_label: string
   description: string
+  /**
+   * What this preset refuses to do. Optional because a backend predating the
+   * field simply omits it, and a missing ban list should hide the row rather
+   * than render an empty one.
+   */
+  avoid?: string
 }
 
 export interface StyleLibrary {

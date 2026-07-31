@@ -53,6 +53,29 @@
   --voice:      #0a6e8a;
   --voice-tint: #e4f3f8;
 
+  /* Axis identity. Each axis owns a hue so it stays recognisable wherever it
+     appears — in the draft strip, on a direction card, in the legend. The ramp
+     above still colours *how good* a score is; these say *which axis* it is.
+     All three are >= 4.5:1 on --paper, so they can carry text as well as fills. */
+  --axis-dist:       #9a5b00;
+  --axis-dist-tint:  #fdf1e0;
+  --axis-voice:      #0a6e8a;
+  --axis-voice-tint: #e4f3f8;
+  --axis-onmsg:      #0f6b62;
+  --axis-onmsg-tint: #e3f4f1;
+
+  /* Style-group identity, so Compression and Counter-LLM are told apart at a
+     glance rather than by reading. Used as a 9px marker, never as text. */
+  --grp-compression: #2438e8;
+  --grp-sensory:     #b03a76;
+  --grp-argument:    #9a5b00;
+  --grp-persona:     #6b3fc4;
+  --grp-counter:     #067a55;
+
+  /* The unfilled bed of a rail. Distinct from --well-2 because a rail sits on
+     both paper and well surfaces and has to read as recessed on either. */
+  --rail-bed:   #e7ebf3;
+
   --r-sm: 6px;
   --r:    9px;
   --r-lg: 13px;
@@ -357,6 +380,78 @@ input[type="range"] {
   height: 18px;
 }
 
+/* ── Health pill & popover ─────────────────────────────────────────────────
+   The pill states live-or-demo; the popover names the three model roles the
+   region actually resolved. It reads /health rather than config, so it can never
+   claim a model that isn't loaded — the point of the whole registry.          */
+
+.health { position: relative; }
+
+.health__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--well);
+  border: 1px solid var(--rule);
+  border-radius: 99px;
+  padding: 5px 11px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  transition: border-color 0.12s, background 0.12s;
+}
+.health__pill:hover { border-color: var(--rule-firm); background: var(--paper); }
+
+.health__dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.health__dot--live { background: var(--high); }
+.health__dot--demo { background: var(--mid); }
+
+.health__popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  background: var(--paper);
+  border: 1px solid var(--rule-firm);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-lg);
+  padding: 12px 13px;
+  text-align: left;
+  cursor: default;
+}
+
+.health__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--rule);
+  font-size: 11.5px;
+}
+.health__row:last-of-type { border-bottom: none; }
+.health__role { color: var(--ink-3); flex: none; }
+.health__model {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink);
+  text-align: right;
+  word-break: break-all;
+}
+.health__note {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--rule);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
 /* ── Style picker ──────────────────────────────────────────────────────────*/
 
 .group-head {
@@ -473,6 +568,9 @@ input[type="range"] {
 
 .meter { display: grid; grid-template-columns: 74px minmax(0, 1fr) 52px; align-items: center; gap: 9px; }
 .meter__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-family: var(--mono);
   font-size: 9.5px;
   font-weight: 700;
@@ -480,11 +578,21 @@ input[type="range"] {
   text-transform: uppercase;
   color: var(--ink-3);
 }
+
+/* The axis dot. Carries the axis hue so a rail is identifiable before you read
+   its label — the same marker appears in the centre-column legend. */
+.meter__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
 .meter__rail {
   position: relative;
   height: 9px;
   border-radius: 99px;
-  background: var(--well-2);
+  background: var(--rail-bed);
   border: 1px solid var(--rule);
 }
 .meter__fill {
@@ -493,14 +601,27 @@ input[type="range"] {
   border-radius: 99px;
   transition: width 0.55s cubic-bezier(0.32, 0.72, 0, 1);
 }
+/* The ghost tick — the draft's own score, pinned to the rail.
+   A bar with a cap on top, so it reads as a deliberate marker rather than a gap
+   in the fill. The cap is what makes it legible when the fill sits right on it. */
 .meter__ghost {
   position: absolute;
   top: -4px;
   width: 2px;
-  height: 15px;
+  height: 17px;
   border-radius: 1px;
   background: var(--ink-2);
   transform: translateX(-1px);
+}
+.meter__ghost::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-2);
 }
 .meter__val {
   font-family: var(--mono);
@@ -516,6 +637,110 @@ input[type="range"] {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
+/* An axis that cannot be measured yet says so, rather than showing a number it
+   would have to invent. Voice Match is locked until samples are validated. */
+.meter__locked {
+  grid-column: 2 / -1;
+  font-size: 10.5px;
+  font-style: italic;
+  color: var(--ink-3);
+}
+.meter__unlock {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-style: normal;
+  color: var(--axis-voice);
+  text-decoration: underline;
+}
+
+/* ── Legend ────────────────────────────────────────────────────────────────
+   Names the three axes once, above the results, so each rail's dot is already
+   meaningful by the time you read a card.                                    */
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 8px 13px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--well);
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+.legend > span { display: inline-flex; align-items: center; gap: 5px; }
+
+/* A miniature of the ghost tick, so the legend explains the marker by showing
+   it rather than describing it. */
+.legend__tick {
+  position: relative;
+  width: 2px;
+  height: 11px;
+  border-radius: 1px;
+  background: var(--ink-2);
+  flex: none;
+}
+.legend__tick::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-2);
+}
+
+/* ── Divergence notches ────────────────────────────────────────────────────
+   Three named cards rather than a bare slider, because each notch can state its
+   own effect. A 0-100 slider cannot tell you what 40 means.                   */
+
+.notches { display: flex; gap: 7px; }
+.notch {
+  flex: 1;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 8px 6px;
+  text-align: center;
+  transition: border-color 0.12s, background 0.12s;
+}
+.notch:hover { border-color: var(--rule-firm); background: var(--well); }
+.notch[aria-pressed="true"] { border-color: var(--axis-dist); background: var(--axis-dist-tint); }
+.notch__name {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.notch[aria-pressed="true"] .notch__name { color: var(--axis-dist); }
+.notch__desc { display: block; font-size: 9.5px; line-height: 1.35; color: var(--ink-3); margin-top: 2px; }
+
+/* ── Style group markers ───────────────────────────────────────────────────*/
+
+.grp-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: none;
+}
+
+/* A preset's ban list, revealed on selection — the `avoid` clause is half of
+   what a preset actually does, so it should be visible once it is in play. */
+.style__avoid {
+  display: none;
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px dashed var(--rule-firm);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+.style[aria-pressed="true"] .style__avoid { display: block; }
+.style__avoid strong { color: var(--low); font-weight: 600; }
 
 /* ── Generated prose ───────────────────────────────────────────────────────*/
 

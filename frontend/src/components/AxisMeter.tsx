@@ -13,6 +13,16 @@ import React from 'react'
  * High is good on every axis, so the colour ramp reads in one direction.
  */
 
+/** Which axis this is. Drives the identity dot, so a rail is recognisable
+ *  before its label is read. */
+export type Axis = 'dist' | 'voice' | 'onmsg'
+
+const AXIS_COLOR: Record<Axis, string> = {
+  dist: 'var(--axis-dist)',
+  voice: 'var(--axis-voice)',
+  onmsg: 'var(--axis-onmsg)',
+}
+
 interface Props {
   label: string
   /** 0–100, or null while the value is still being measured. */
@@ -25,6 +35,19 @@ interface Props {
   tone?: 'auto' | 'voice'
   /** Plain-language explanation of what the axis measures. */
   hint?: string
+  /** Which axis, for the identity dot. Defaults to distinctiveness. */
+  axis?: Axis
+  /**
+   * Why this axis cannot be measured yet. When set, the rail is replaced by this
+   * sentence — a locked axis says so rather than showing a number it would have
+   * to invent, which is the whole reason Voice Match stays empty until samples
+   * are validated.
+   */
+  lockedReason?: string | null
+  /** Action that would unlock the axis, rendered inline after the reason. */
+  onUnlock?: () => void
+  /** Label for the unlock action. */
+  unlockLabel?: string
 }
 
 function rampColor(value: number): string {
@@ -40,7 +63,35 @@ export default function AxisMeter({
   delta = null,
   tone = 'auto',
   hint,
+  axis = 'dist',
+  lockedReason = null,
+  onUnlock,
+  unlockLabel = 'Add samples',
 }: Props) {
+  // A locked axis is a different statement from an unmeasured one: "cannot be
+  // measured yet, and here is why" rather than "measuring". Say it in words.
+  if (lockedReason) {
+    return (
+      <div className="meter" title={hint}>
+        <span className="meter__label">
+          <span className="meter__dot" style={{ background: AXIS_COLOR[axis], opacity: 0.35 }} />
+          {label}
+        </span>
+        <span className="meter__locked">
+          {lockedReason}
+          {onUnlock && (
+            <>
+              {' '}
+              <button type="button" className="meter__unlock" onClick={onUnlock}>
+                {unlockLabel}
+              </button>
+            </>
+          )}
+        </span>
+      </div>
+    )
+  }
+
   const pending = value === null
   const pct = pending ? 0 : Math.max(0, Math.min(100, value))
   const color = pending
@@ -52,10 +103,14 @@ export default function AxisMeter({
   // Only worth drawing the comparison tick if there is a comparison to draw.
   const showGhost = !pending && baseline != null
   const ghostPct = showGhost ? Math.max(0, Math.min(100, baseline)) : 0
+  const ghostLabel = showGhost ? `Your draft: ${Math.round(ghostPct)}` : undefined
 
   return (
     <div className="meter" title={hint}>
-      <span className="meter__label">{label}</span>
+      <span className="meter__label">
+        <span className="meter__dot" style={{ background: AXIS_COLOR[axis] }} />
+        {label}
+      </span>
 
       <div
         className="meter__rail"
@@ -68,11 +123,7 @@ export default function AxisMeter({
       >
         <div className="meter__fill" style={{ width: `${pct}%`, background: color }} />
         {showGhost && (
-          <div
-            className="meter__ghost"
-            style={{ left: `${ghostPct}%` }}
-            title={`Your draft: ${Math.round(ghostPct)}`}
-          />
+          <div className="meter__ghost" style={{ left: `${ghostPct}%` }} title={ghostLabel} />
         )}
       </div>
 

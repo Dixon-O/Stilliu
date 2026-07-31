@@ -49,6 +49,22 @@ const TAB_KEYS: Record<TabId, (keyof WriterControls)[]> = {
   voice:    ['voice_strength'],
 }
 
+/**
+ * Group identity colours. Keyed by the backend's own group ids, so a group added
+ * in styles.py inherits the neutral fallback rather than breaking the picker.
+ */
+const GROUP_COLORS: Record<string, string> = {
+  compression: 'var(--grp-compression)',
+  sensory:     'var(--grp-sensory)',
+  argument:    'var(--grp-argument)',
+  voice:       'var(--grp-persona)',
+  counter_llm: 'var(--grp-counter)',
+}
+
+function groupColor(id: string): string {
+  return GROUP_COLORS[id] ?? 'var(--rule-firm)'
+}
+
 /** Two groups open on load; the rest collapse so the picker stays scannable. */
 const OPEN_BY_DEFAULT = ['compression', 'counter_llm']
 
@@ -250,6 +266,11 @@ export default function ControlsPanel({
                           }
                         }}
                       >
+                        <span
+                          className="grp-dot"
+                          style={{ background: groupColor(group.id) }}
+                          aria-hidden="true"
+                        />
                         <span style={S.spacer}>{group.label}</span>
                         {chosenHere > 0 && <span className="tab__count">{chosenHere}</span>}
                         <span style={S.chevron}>{open ? '▲' : '▼'}</span>
@@ -274,6 +295,14 @@ export default function ControlsPanel({
                                   <span style={S.styleText}>
                                     <span className="style__name">{s.name}</span>
                                     <span className="style__desc">{s.description}</span>
+                                    {s.avoid && (
+                                      // Revealed by CSS only once the preset is
+                                      // selected — what it refuses to do matters
+                                      // when it is in play, not while browsing.
+                                      <span className="style__avoid">
+                                        <strong>Avoids:</strong> {s.avoid}
+                                      </span>
+                                    )}
                                   </span>
                                 </button>
                               )
@@ -309,12 +338,26 @@ export default function ControlsPanel({
         {/* ── Shape ───────────────────────────────────────────────────────── */}
         {tab === 'shape' && (
           <>
-            <Choice
-              label="Divergence"
-              options={DIVERGENCE_NOTCHES}
-              value={controls.divergence}
-              onPick={(v) => set('divergence', v)}
-            />
+            {/* Divergence gets named cards rather than a segmented control: each
+                notch states its own effect, which a bare slider cannot do. */}
+            <div className="field">
+              <label className="field__label">Divergence — how far a rewrite may travel</label>
+              <div className="notches" role="group" aria-label="Divergence">
+                {DIVERGENCE_NOTCHES.map((n) => (
+                  <button
+                    key={n.value}
+                    type="button"
+                    className="notch"
+                    aria-pressed={controls.divergence === n.value}
+                    onClick={() => set('divergence', n.value)}
+                    title={n.hint}
+                  >
+                    <span className="notch__name">{n.label}</span>
+                    <span className="notch__desc">{n.hint}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
             <Choice
               label="Format"
               options={FORMAT_OPTIONS}
