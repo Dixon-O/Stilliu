@@ -243,6 +243,32 @@ export default function App() {
     // is a fingerprint, so the parent tab must not count it either.
     (!fingerprint.isActive && countActive(controls, ['voice_strength']) ? 1 : 0)
 
+  /**
+   * When a fingerprint arrives, re-score a draft that was already scored.
+   *
+   * Voice match is computed server-side from the samples sent with the request,
+   * so scores taken before the fingerprint existed have no voice number and no
+   * way to acquire one locally. Validating samples is a deliberate act with an
+   * obvious intent — "now measure me against these" — so waiting for a second
+   * manual click on Score draft is just a chore the app can do itself.
+   *
+   * Deliberately narrow. It fires only when there is already a score on screen
+   * for the current draft text, so it can never kick off a surprise model call
+   * for someone who has not asked for a measurement yet.
+   */
+  const fingerprintReady = fingerprint.isActive
+  useEffect(() => {
+    if (!fingerprintReady) return
+    if (draftScores == null) return          // nothing on screen to bring up to date
+    if (draftScores.voice_match != null) return  // already has the axis
+    if (scoring || pending.length > 0) return    // don't race an in-flight request
+    if (trimmed.length < 10 || trimmed !== scoredFor) return  // scores are stale anyway
+    void measure()
+    // `measure` is intentionally omitted: it closes over state that changes every
+    // render, and the guards above already pin the exact condition to fire on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fingerprintReady, draftScores, scoring, pending.length, trimmed, scoredFor])
+
   // ── Actions ───────────────────────────────────────────────────────────────
 
   /** Score the draft on its own — fast, no generation. */
@@ -570,11 +596,38 @@ export default function App() {
                   label="Voice"
                   value={draftScores?.voice_match ?? null}
                   tone="voice"
-                  // Locked rather than zeroed: a voice score with nothing to
-                  // compare against would be the one number here not derived
-                  // from anything.
-                  lockedReason={fingerprint.isActive ? null : 'Needs your writing samples.'}
-                  onUnlock={() => setSourceTab('voice')}
+                  /*
+                   * Three distinct states, and conflating any two of them lies.
+                   *
+                   *   no samples          -> locked. A voice score with nothing to
+                   *                          compare against would be the one
+                   *                          number here not derived from anything.
+                   *   samples, not scored -> "score to see it". The samples cannot
+                   *                          retro-fit a score: voice match is
+                   *                          computed server-side from the samples
+                   *                          sent *with* the request, so a draft
+                   *                          scored before the fingerprint existed
+                   *                          genuinely has no voice number yet.
+                   *   scored with samples -> the live rail.
+                   *
+                   * The middle state used to fall through to a bare dash, which
+                   * read as "measured, and the answer is nothing".
+                   */
+                  lockedReason={
+                    !fingerprint.isActive
+                      ? 'Needs your writing samples.'
+                      : draftScores?.voice_match == null
+                        ? 'Score the draft to read this axis.'
+                        : null
+                  }
+                  onUnlock={
+                    fingerprint.isActive
+                      ? draftScores?.voice_match == null
+                        ? measure
+                        : undefined
+                      : () => setSourceTab('voice')
+                  }
+                  unlockLabel={fingerprint.isActive ? 'Score draft' : 'Add samples'}
                   hint="How much your draft sounds like your samples."
                 />
                 {baselinePreview && (
